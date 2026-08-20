@@ -1,0 +1,861 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta name="apple-mobile-web-app-title" content="Viajes"/>
+<title>Travel Organizer</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  *{box-sizing:border-box;-webkit-tap-highlight-color:transparent;}
+  body{margin:0;padding:0;background:#0f172a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;color:#f8fafc;overscroll-behavior:none;}
+  input,textarea,button,select{font-family:inherit;}
+  textarea{outline:none;}
+  input:focus,textarea:focus{outline:none;}
+  ::-webkit-scrollbar{width:4px;height:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:#334155;border-radius:4px;}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+const { useState, useEffect, useRef } = React;
+
+// ─── GITHUB GIST STORAGE ───────────────────────────────────────────────────
+const GITHUB_TOKEN = "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";
+const GIST_FILENAME = "travel-organizer-data.json";
+const LOCAL_KEY = "travel_organizer_v1";
+let gistId = null;
+
+function localSave(trips) {
+  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(trips)); } catch {}
+}
+function localLoad() {
+  try { const r = localStorage.getItem(LOCAL_KEY); if (r) return JSON.parse(r); } catch {}
+  return null;
+}
+async function gistLoad() {
+  const res = await fetch("https://api.github.com/gists", {
+    headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
+  });
+  if (!res.ok) throw new Error(`GitHub ${res.status}`);
+  const gists = await res.json();
+  const found = gists.find(g => g.files[GIST_FILENAME]);
+  if (!found) return null;
+  gistId = found.id;
+  const res2 = await fetch(`https://api.github.com/gists/${gistId}`, {
+    headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
+  });
+  const data = await res2.json();
+  const raw = data.files[GIST_FILENAME]?.content;
+  return raw ? JSON.parse(raw) : null;
+}
+async function gistSave(trips) {
+  const content = JSON.stringify(trips, null, 2);
+  const headers = { "Authorization": `token ${GITHUB_TOKEN}`, "Content-Type": "application/json", "Accept": "application/vnd.github.v3+json" };
+  if (gistId) {
+    await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [GIST_FILENAME]:{ content } } }) });
+  } else {
+    const res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:"Travel Organizer", public:false, files:{ [GIST_FILENAME]:{ content } } }) });
+    const d = await res.json(); gistId = d.id;
+  }
+}
+function saveTrips(trips) { localSave(trips); gistSave(trips).catch(()=>{}); }
+
+// ─── HELPERS ───────────────────────────────────────────────────────────────
+const newId = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
+const fmtDate = d => { if(!d)return""; const[y,m,dd]=d.split("-"); return`${dd}/${m}/${y}`; };
+const fmtShort = d => { if(!d)return""; const p=d.split("-"); return p.length===3?p[2]+"/"+p[1]:d; };
+const DEST_EMOJI = d => {
+  if(!d)return"🌍"; const l=d.toLowerCase();
+  if(l.includes("lon")||l.includes("uk"))return"🇬🇧";
+  if(l.includes("par")||l.includes("fran"))return"🇫🇷";
+  if(l.includes("tok")||l.includes("japon"))return"🇯🇵";
+  if(l.includes("rom")||l.includes("ital"))return"🇮🇹";
+  if(l.includes("bar")||l.includes("mad")||l.includes("espa"))return"🇪🇸";
+  if(l.includes("lis")||l.includes("port"))return"🇵🇹";
+  if(l.includes("ams"))return"🇳🇱"; if(l.includes("berl"))return"🇩🇪";
+  if(l.includes("new york")||l.includes("nyc"))return"🇺🇸";
+  return"🌍";
+};
+const sortBlock = b => { const t=b.time.match(/(\d{1,2}):(\d{2})/); if(t)return parseInt(t[1])*60+parseInt(t[2]); if(b.time==="Mañana")return 8*60; if(b.time==="Tarde")return 14*60; if(b.time==="Noche")return 20*60; return 99*60; };
+const BLOCK_QUICK = ["Mañana","Tarde","Noche","08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00"];
+const TYPE_FILTERS = [["todos","🔍 Todos"],["vuelo","✈️ Vuelos"],["tren","🚂 Trenes"],["bus","🚌 Buses"],["hotel","🏨 Hoteles"],["evento","📌 Eventos"]];
+const getIcon = t => t==="vuelo"?"✈️":t==="tren"?"🚂":t==="bus"?"🚌":t==="hotel"?"🏨":"📌";
+
+// ─── STYLES ────────────────────────────────────────────────────────────────
+const pBtn = {padding:"10px 18px",background:"#2563eb",color:"white",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:700};
+const sBtn = {padding:"8px 14px",background:"transparent",color:"#94a3b8",border:"1px solid #334155",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:600};
+const bdg = {display:"inline-block",padding:"3px 8px",background:"#1e3a5f",color:"#93c5fd",borderRadius:20,fontSize:11,fontWeight:600};
+const iS = {width:"100%",background:"#0f172a",border:"1px solid #334155",borderRadius:8,color:"#f8fafc",padding:"10px 12px",fontSize:14,boxSizing:"border-box"};
+const lS = {fontSize:12,color:"#64748b",marginBottom:5,display:"block"};
+
+// ─── MAP ───────────────────────────────────────────────────────────────────
+function TripMap({ stops }) {
+  const [id] = useState("map-"+Math.random().toString(36).slice(2,7));
+  useEffect(() => {
+    if(!stops?.length) return;
+    const valid = stops.filter(s=>s.lat&&s.lng);
+    if(!valid.length) return;
+    let map = null;
+    const init = () => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      if(el._leaflet_id){el._leaflet_id=null;el.innerHTML="";}
+      map = window.L.map(id).setView([valid[0].lat,valid[0].lng],14);
+      window.L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png",{attribution:"© OpenStreetMap"}).addTo(map);
+      valid.forEach((s,i)=>{
+        const icon=window.L.divIcon({className:"",html:`<div style="background:#2563eb;color:white;border-radius:50%;width:28px;height:28px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:13px;border:2px solid white;box-shadow:0 2px 6px rgba(0,0,0,.4)">${i+1}</div>`,iconSize:[28,28],iconAnchor:[14,14]});
+        window.L.marker([s.lat,s.lng],{icon}).addTo(map).bindPopup(`<b>${i+1}. ${s.name}</b>${s.note?"<br>"+s.note:""}`);
+      });
+      if(valid.length>1){const c=valid.map(s=>[s.lat,s.lng]);window.L.polyline(c,{color:"#2563eb",weight:2,dashArray:"6,6",opacity:0.6}).addTo(map);map.fitBounds(c,{padding:[30,30]});}
+    };
+    if(window.L)init(); else setTimeout(init,500);
+    return()=>{try{map?.remove();}catch{}};
+  },[stops,id]);
+  const gmUrl = stops?.filter(s=>s.lat&&s.lng).length>0?"https://www.google.com/maps/dir/"+stops.filter(s=>s.lat&&s.lng).map(s=>`${s.lat},${s.lng}`).join("/"):null;
+  return (
+    <div>
+      {stops?.some(s=>s.lat&&s.lng)
+        ? <div id={id} style={{height:350,borderRadius:12,overflow:"hidden"}}/>
+        : <div style={{height:140,borderRadius:12,background:"#1e293b",display:"flex",alignItems:"center",justifyContent:"center",color:"#475569",flexDirection:"column",gap:6}}><div style={{fontSize:24}}>🗺️</div><div style={{fontSize:12}}>Sin coordenadas</div></div>}
+      {gmUrl&&<a href={gmUrl} target="_blank" rel="noopener noreferrer" style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:10,padding:"8px 14px",background:"#2563eb",color:"white",borderRadius:8,fontSize:13,fontWeight:600,textDecoration:"none"}}>🗺️ Abrir en Google Maps</a>}
+    </div>
+  );
+}
+
+// ─── MODAL ─────────────────────────────────────────────────────────────────
+function Modal({title,onClose,children}){
+  return(
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:200,display:"flex",alignItems:"flex-end",justifyContent:"center"}} onClick={onClose}>
+      <div style={{background:"#1e293b",borderRadius:"16px 16px 0 0",width:"100%",maxWidth:600,maxHeight:"88vh",overflow:"auto",padding:"20px 18px 40px"}} onClick={e=>e.stopPropagation()}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:18}}>
+          <div style={{fontWeight:700,fontSize:17}}>{title}</div>
+          <button onClick={onClose} style={{background:"none",border:"none",color:"#94a3b8",fontSize:22,cursor:"pointer"}}>✕</button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// ─── EVENTS TAB ────────────────────────────────────────────────────────────
+function EventsTab({events,onAdd,onDelete,onEdit}){
+  const [filter,setFilter]=useState("todos");
+  const filtered=filter==="todos"?events:events.filter(e=>e.type===filter);
+  const groups={};
+  filtered.forEach((ev)=>{
+    const key=ev.dayLabel||"Sin día asignado";
+    if(!groups[key])groups[key]=[];
+    groups[key].push({ev,idx:events.indexOf(ev)});
+  });
+  const sortedKeys=Object.keys(groups).sort((a,b)=>{
+    if(a==="Sin día asignado")return 1; if(b==="Sin día asignado")return-1;
+    const na=parseInt(a.match(/\d+/)?.[0]||"999"); const nb=parseInt(b.match(/\d+/)?.[0]||"999");
+    return na-nb;
+  });
+  return(
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:14}}>
+        <h2 style={{margin:0,fontSize:18,fontWeight:700}}>Eventos fijos</h2>
+        <button onClick={onAdd} style={{...pBtn,padding:"8px 14px",fontSize:13}}>+ Evento</button>
+      </div>
+      <div style={{display:"flex",gap:6,marginBottom:16,flexWrap:"wrap"}}>
+        {TYPE_FILTERS.map(([key,label])=>(
+          <button key={key} onClick={()=>setFilter(key)}
+            style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:filter===key?"#60a5fa":"#334155",background:filter===key?"#1d4ed8":"transparent",color:filter===key?"white":"#94a3b8",cursor:"pointer",fontSize:12,fontWeight:600}}>
+            {label}
+          </button>
+        ))}
+      </div>
+      {!events.length?(
+        <div style={{color:"#475569",textAlign:"center",padding:40}}>
+          <div style={{fontSize:32,marginBottom:10}}>📌</div>
+          <div>Añade vuelos, trenes, buses o eventos</div>
+        </div>
+      ):filtered.length===0?(
+        <div style={{color:"#475569",textAlign:"center",padding:30,fontSize:14}}>No hay eventos de este tipo</div>
+      ):(
+        sortedKeys.map(key=>(
+          <div key={key} style={{marginBottom:20}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+              <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:"#60a5fa",fontWeight:700}}>{key}</div>
+              <div style={{flex:1,height:1,background:"#1e293b"}}/>
+            </div>
+            {groups[key].map(({ev,idx})=>(
+              <div key={idx} style={{display:"flex",gap:12,padding:"13px 14px",background:"#1e293b",borderRadius:12,marginBottom:6,alignItems:"flex-start"}}>
+                <div style={{fontSize:20,flexShrink:0}}>{ev.icon||"📌"}</div>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:700,fontSize:14}}>{ev.description}</div>
+                  <div style={{fontSize:12,color:"#64748b",marginTop:3}}>
+                    {ev.date&&<span>{fmtShort(ev.date)}</span>}
+                    {ev.time&&<span>{ev.date?" · ":""}{ev.time&&"🛫 "+ev.time}</span>}
+                    {ev.arrivalTime&&<span> → 🛬 {ev.arrivalTime}</span>}
+                  </div>
+                  {ev.dayLabel&&<span style={{display:"inline-block",marginTop:4,padding:"2px 8px",background:"#1d4ed8",color:"#bfdbfe",borderRadius:10,fontSize:11,fontWeight:600}}>{ev.dayLabel.match(/Día \d+/)?.[0]||ev.dayLabel}</span>}
+                </div>
+                <div style={{display:"flex",gap:4,flexShrink:0}}>
+                  <button onClick={()=>onEdit(idx,ev)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:14}}>✏️</button>
+                  <button onClick={()=>onDelete(idx)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:14}}>✕</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ))
+      )}
+    </div>
+  );
+}
+
+// ─── MAIN APP ──────────────────────────────────────────────────────────────
+function App(){
+  const [trips,setTrips]=useState([]);
+  const [activeTrip,setActiveTrip]=useState(null);
+  const [activeDay,setActiveDay]=useState(0);
+  const [activeTab,setActiveTab]=useState("agenda");
+  const [view,setView]=useState("home");
+  const [initialized,setInitialized]=useState(false);
+  const [modal,setModal]=useState(null);
+  const [form,setForm]=useState({});
+  const [jsonInput,setJsonInput]=useState("");
+  const [jsonError,setJsonError]=useState("");
+  const [status,setStatus]=useState("");
+  const [syncing,setSyncing]=useState(false);
+
+  // ── Load ──────────────────────────────────────────────────────────────────
+  useEffect(()=>{
+    const local=localLoad()||[];
+    if(local.length){setTrips(local);setInitialized(true);}
+    setSyncing(true);
+    gistLoad().then(cloud=>{
+      if(cloud&&cloud.length>0){
+        if(cloud.length>=local.length){setTrips(cloud);localSave(cloud);}
+        else gistSave(local).catch(()=>{});
+      } else if(local.length>0){
+        gistSave(local).catch(()=>{});
+      }
+    }).catch(()=>{}).finally(()=>{setSyncing(false);setInitialized(true);});
+  },[]);
+
+  const persist=(updated)=>{
+    setTrips(updated);
+    localSave(updated);
+    gistSave(updated).catch(()=>{});
+    if(activeTrip){const r=updated.find(t=>t.id===activeTrip.id);if(r)setActiveTrip(r);}
+  };
+  const updateActiveTrip=(trip)=>{
+    setActiveTrip(trip);
+    const updated=trips.map(t=>t.id===trip.id?trip:t);
+    setTrips(updated); localSave(updated); gistSave(updated).catch(()=>{});
+  };
+
+  // ── Trip handlers ─────────────────────────────────────────────────────────
+  const handleNewTrip=()=>{
+    if(!form.title?.trim())return;
+    const dates=[form.dateFrom,form.dateTo].filter(Boolean).map(fmtDate).join(" → ");
+    let autoDays=[];
+    if(form.dateFrom&&form.dateTo){
+      const dn=["domingo","lunes","martes","miércoles","jueves","viernes","sábado"];
+      let d=new Date(form.dateFrom),i=1;
+      const end=new Date(form.dateTo);
+      while(d<=end&&i<=30){
+        const dd=String(d.getDate()).padStart(2,"0"),mm=String(d.getMonth()+1).padStart(2,"0");
+        autoDays.push({id:newId(),day:i,label:`Día ${i} — ${dn[d.getDay()]} ${dd}/${mm}`,agenda:[],mapStops:[]});
+        d.setDate(d.getDate()+1);i++;
+      }
+    }
+    const trip={id:newId(),title:form.title.trim(),destination:form.destination?.trim()||"",dates,dateFrom:form.dateFrom||"",dateTo:form.dateTo||"",createdAt:new Date().toISOString(),days:autoDays,fixedEvents:[],landmarks:null};
+    const updated=[...trips,trip];
+    persist(updated);
+    setActiveTrip(trip);setActiveDay(0);setActiveTab("agenda");setView("trip");setModal(null);setForm({});
+  };
+
+  const handleNewDay=()=>{
+    if(!form.label?.trim())return;
+    const days=activeTrip.days||[];
+    const pos=form.insertAfter===undefined?days.length:form.insertAfter;
+    const newDay={id:newId(),day:0,label:form.label.trim(),agenda:[],mapStops:[]};
+    const reordered=[...days.slice(0,pos),newDay,...days.slice(pos)].map((d,i)=>({...d,day:i+1}));
+    const updated={...activeTrip,days:reordered};
+    updateActiveTrip(updated);setActiveDay(pos);setModal(null);setForm({});
+  };
+
+  const handleNewBlock=()=>{
+    if(!form.time?.trim())return;
+    const day=activeTrip.days[activeDay];
+    const block={id:newId(),time:form.time.trim(),items:[]};
+    const sorted=[...(day.agenda||[]),block].sort((a,b)=>sortBlock(a)-sortBlock(b));
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:sorted}:d)});
+    setModal(null);setForm({});
+  };
+
+  const handleNewItem=()=>{
+    if(!form.text?.trim())return;
+    const day=activeTrip.days[activeDay];
+    const updatedAgenda=day.agenda.map((b,bi)=>bi!==form.blockIdx?b:{...b,items:[...(b.items||[]),form.text.trim()]});
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
+    setModal(null);setForm({});
+  };
+
+  const handleEditItem=()=>{
+    if(!form.text?.trim())return;
+    const day=activeTrip.days[activeDay];
+    const updatedAgenda=day.agenda.map((b,bi)=>bi!==form.blockIdx?b:{...b,items:b.items.map((it,ii)=>ii===form.itemIdx?form.text.trim():it)});
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
+    setModal(null);setForm({});
+  };
+
+  const deleteItem=(bi,ii)=>{
+    const day=activeTrip.days[activeDay];
+    const updatedAgenda=day.agenda.map((b,bii)=>bii!==bi?b:{...b,items:b.items.filter((_,i)=>i!==ii)});
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
+  };
+  const deleteBlock=(bi)=>{
+    const day=activeTrip.days[activeDay];
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:day.agenda.filter((_,bii)=>bii!==bi)}:d)});
+  };
+  const deleteDay=(di)=>{
+    const updatedDays=activeTrip.days.filter((_,i)=>i!==di).map((d,i)=>({...d,day:i+1}));
+    setActiveDay(Math.max(0,Math.min(activeDay,updatedDays.length-1)));
+    updateActiveTrip({...activeTrip,days:updatedDays});
+  };
+
+  const buildEventBlock=(form,icon)=>{
+    const blockLabel=form.time?`${form.time} ${icon}`:icon;
+    const dateStr=form.date?fmtShort(form.date):"";
+    const timeStr=form.time?`🛫 ${form.time}`:"";
+    const arrStr=form.arrivalTime?` → 🛬 ${form.arrivalTime}`:"";
+    const dateTag=dateStr?` (${dateStr})`:"";
+    const itemText=`${icon} ${form.description.trim()}${dateTag}${timeStr||arrStr?" · "+timeStr+arrStr:""}`;
+    return{id:newId(),time:blockLabel,items:[itemText],fromEvent:true};
+  };
+
+  const insertEventBlock=(days,dayLabel,block)=>{
+    const dayIdx=days.findIndex(d=>d.label===dayLabel);
+    if(dayIdx<0)return days;
+    const agenda=[...(days[dayIdx].agenda||[]),block].sort((a,b)=>sortBlock(a)-sortBlock(b));
+    return days.map((d,i)=>i===dayIdx?{...d,agenda}:d);
+  };
+
+  const handleNewEvent=()=>{
+    if(!form.description?.trim())return;
+    const icon=getIcon(form.type);
+    const hasTransit=["vuelo","tren","bus"].includes(form.type);
+    const ev={id:newId(),date:form.date||"",time:form.time||"",arrivalTime:(hasTransit&&form.arrivalTime)||"",dayLabel:form.dayLabel||"",type:form.type||"evento",description:form.description.trim(),icon};
+    const sortEv=e=>(e.date||"9999")+(e.time||"99:99");
+    const sorted=[...(activeTrip.fixedEvents||[]),ev].sort((a,b)=>sortEv(a).localeCompare(sortEv(b)));
+    let updatedDays=activeTrip.days;
+    if(form.dayLabel){const block=buildEventBlock(form,icon);updatedDays=insertEventBlock(updatedDays,form.dayLabel,block);}
+    updateActiveTrip({...activeTrip,fixedEvents:sorted,days:updatedDays});
+    setModal(null);setForm({});
+  };
+
+  const handleEditEvent=()=>{
+    if(!form.description?.trim())return;
+    const icon=getIcon(form.type);
+    const hasTransit=["vuelo","tren","bus"].includes(form.type);
+    const oldEv=activeTrip.fixedEvents[form.editIdx];
+    const sortEv=e=>(e.date||"9999")+(e.time||"99:99");
+    const updated=activeTrip.fixedEvents.map((ev,i)=>i===form.editIdx?{id:ev.id,date:form.date||"",time:form.time||"",arrivalTime:(hasTransit&&form.arrivalTime)||"",dayLabel:form.dayLabel||"",type:form.type||"evento",description:form.description.trim(),icon}:ev).sort((a,b)=>sortEv(a).localeCompare(sortEv(b)));
+    let updatedDays=activeTrip.days.map(d=>({...d,agenda:(d.agenda||[]).filter(b=>!b.fromEvent||!b.items?.[0]?.includes(oldEv.description))}));
+    if(form.dayLabel){const block=buildEventBlock(form,icon);updatedDays=insertEventBlock(updatedDays,form.dayLabel,block);}
+    updateActiveTrip({...activeTrip,fixedEvents:updated,days:updatedDays});
+    setModal(null);setForm({});
+  };
+
+  const deleteEvent=(i)=>updateActiveTrip({...activeTrip,fixedEvents:activeTrip.fixedEvents.filter((_,ii)=>ii!==i)});
+  const handleNewStop=()=>{
+    if(!form.name?.trim())return;
+    const stop={id:newId(),name:form.name.trim(),note:form.note?.trim()||"",lat:form.lat?parseFloat(form.lat):null,lng:form.lng?parseFloat(form.lng):null};
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,mapStops:[...(d.mapStops||[]),stop]}:d)});
+    setModal(null);setForm({});
+  };
+  const deleteStop=(i)=>updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,di)=>di===activeDay?{...d,mapStops:d.mapStops.filter((_,ii)=>ii!==i)}:d)});
+
+  const handleImportLandmarks=()=>{
+    setJsonError("");
+    try{
+      const data=JSON.parse(jsonInput.trim());
+      if(!data.landmarks&&!data.food)throw new Error();
+      const updated=trips.map(t=>t.id===activeTrip.id?{...t,landmarks:data}:t);
+      persist(updated);setActiveTrip(updated.find(t=>t.id===activeTrip.id));
+      setJsonInput("");setModal(null);
+    }catch{setJsonError("JSON inválido.");}
+  };
+
+  const handlePasteClipboard=async()=>{
+    try{const text=await navigator.clipboard.readText();setJsonInput(text);setJsonError("");}
+    catch{setJsonError("No se pudo acceder al portapapeles. Pega manualmente.");}
+  };
+
+  if(!initialized)return(
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0f172a",color:"#94a3b8",flexDirection:"column",gap:12}}>
+      <div style={{fontSize:32}}>🌍</div>
+      <div style={{fontSize:14}}>Cargando viajes...</div>
+    </div>
+  );
+
+  // ── EVENT FORM FIELDS (reused in new + edit) ──────────────────────────────
+  const EventFormFields=({onSubmit,submitLabel})=>(
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div>
+        <label style={lS}>Tipo</label>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[["vuelo","✈️"],["tren","🚂"],["bus","🚌"],["hotel","🏨"],["evento","📌"]].map(([t,ic])=>(
+            <button key={t} onClick={()=>setForm({...form,type:t})}
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid",borderColor:form.type===t?"#60a5fa":"#334155",background:form.type===t?"#1d4ed8":"transparent",color:form.type===t?"white":"#94a3b8",cursor:"pointer",fontSize:13}}>
+              {ic} {t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div><label style={lS}>Descripción *</label><input style={iS} placeholder="Ej: Vuelo MAD-OPO" value={form.description||""} onChange={e=>setForm({...form,description:e.target.value})}/></div>
+      <div style={{display:"flex",gap:10}}>
+        <div style={{flex:1}}><label style={lS}>Fecha</label><input type="date" style={{...iS,colorScheme:"dark",display:"block"}} value={form.date||""} onChange={e=>setForm({...form,date:e.target.value})}/></div>
+        <div style={{flex:1}}><label style={lS}>Hora salida</label><input type="time" style={{...iS,colorScheme:"dark",display:"block"}} value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})}/></div>
+      </div>
+      {["vuelo","tren","bus"].includes(form.type)&&(
+        <div><label style={lS}>Hora llegada</label><input type="time" style={{...iS,colorScheme:"dark",display:"block"}} value={form.arrivalTime||""} onChange={e=>setForm({...form,arrivalTime:e.target.value})}/></div>
+      )}
+      <div>
+        <label style={lS}>Día del viaje</label>
+        {!(activeTrip?.days||[]).length
+          ?<div style={{fontSize:12,color:"#475569",fontStyle:"italic"}}>Añade días al viaje primero</div>
+          :<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            <button onClick={()=>setForm({...form,dayLabel:""})} style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:!form.dayLabel?"#60a5fa":"#334155",background:!form.dayLabel?"#1d4ed8":"transparent",color:!form.dayLabel?"white":"#94a3b8",cursor:"pointer",fontSize:12}}>Sin día</button>
+            {(activeTrip?.days||[]).map((d,i)=>(
+              <button key={i} onClick={()=>setForm({...form,dayLabel:d.label})} style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:form.dayLabel===d.label?"#60a5fa":"#334155",background:form.dayLabel===d.label?"#1d4ed8":"transparent",color:form.dayLabel===d.label?"white":"#94a3b8",cursor:"pointer",fontSize:12}}>Día {d.day}</button>
+            ))}
+          </div>
+        }
+      </div>
+      <button onClick={onSubmit} disabled={!form.description?.trim()} style={{...pBtn,opacity:!form.description?.trim()?0.5:1}}>{submitLabel}</button>
+    </div>
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // HOME
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="home")return(
+    <div style={{minHeight:"100vh",background:"#0f172a"}}>
+      <div style={{maxWidth:860,margin:"0 auto",padding:"28px 18px 0"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
+          <div>
+            <div style={{fontSize:11,letterSpacing:3,color:"#475569",textTransform:"uppercase",marginBottom:5}}>Tu cuaderno de</div>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <h1 style={{margin:0,fontSize:34,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Viajes</h1>
+              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sincronizando...":"☁️ guardado"}</span>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>setModal("backup")} style={sBtn}>⬇ Backup</button>
+            <button onClick={()=>{setModal("importJSON");setJsonInput("");setJsonError("");}} style={sBtn}>⬆ Importar</button>
+            <button onClick={()=>{setModal("newTrip");setForm({});}} style={pBtn}>+ Nuevo viaje</button>
+          </div>
+        </div>
+        {status&&<div style={{marginTop:10,fontSize:13,color:"#94a3b8"}}>{status}</div>}
+      </div>
+
+      <div style={{maxWidth:860,margin:"22px auto",padding:"0 18px 80px"}}>
+        {trips.length===0?(
+          <div style={{textAlign:"center",padding:"60px 0",color:"#475569"}}>
+            <div style={{fontSize:48,marginBottom:10}}>🌍</div>
+            <div style={{fontSize:16,fontWeight:600}}>Aún no tienes viajes</div>
+            <div style={{fontSize:13,marginTop:5}}>Crea tu primero con el botón de arriba</div>
+          </div>
+        ):(
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
+            {trips.map(t=>(
+              <div key={t.id} onClick={()=>{setActiveTrip(t);setActiveDay(0);setActiveTab("agenda");setView("trip");}}
+                style={{background:"#1e293b",borderRadius:14,padding:16,cursor:"pointer",border:"1px solid #334155"}}>
+                <div style={{display:"flex",justifyContent:"space-between"}}>
+                  <span style={{fontSize:26}}>{DEST_EMOJI(t.destination)}</span>
+                  <button onClick={e=>{e.stopPropagation();persist(trips.filter(x=>x.id!==t.id));}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:15}}>✕</button>
+                </div>
+                <div style={{marginTop:10,fontWeight:700,fontSize:15}}>{t.title}</div>
+                <div style={{fontSize:13,color:"#94a3b8",marginTop:2}}>{t.destination}</div>
+                {t.dates&&<div style={{fontSize:12,color:"#64748b",marginTop:2}}>{t.dates}</div>}
+                <div style={{marginTop:10,display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {t.days?.length>0&&<span style={bdg}>{t.days.length} días</span>}
+                  {t.fixedEvents?.some(e=>e.type==="vuelo")&&<span style={bdg}>✈️</span>}
+                  {t.landmarks&&<span style={{...bdg,background:"#14532d",color:"#86efac"}}>Lugares ✓</span>}
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {modal==="backup"&&(
+        <Modal title="Backup de viajes" onClose={()=>setModal(null)}>
+          <div style={{fontSize:13,color:"#bfdbfe",background:"#1a2744",border:"1px solid #1d4ed8",borderRadius:8,padding:12,marginBottom:12,lineHeight:1.7}}>
+            Copia el texto y guárdalo en Notas, email, etc. Para restaurar usa <b>⬆ Importar</b>.
+          </div>
+          <textarea readOnly value={JSON.stringify(trips,null,2)} onFocus={e=>e.target.select()}
+            style={{width:"100%",minHeight:180,background:"#0f172a",border:"1px solid #334155",borderRadius:8,color:"#94a3b8",padding:12,fontSize:11,fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+          <button onClick={()=>{try{navigator.clipboard.writeText(JSON.stringify(trips,null,2));setStatus("✅ Copiado");setTimeout(()=>setStatus(""),3000);setModal(null);}catch{setStatus("Selecciona el texto y cópialo manualmente");}}}
+            style={{...pBtn,marginTop:12,width:"100%"}}>📋 Copiar al portapapeles</button>
+        </Modal>
+      )}
+
+      {modal==="importJSON"&&(
+        <Modal title="Importar backup" onClose={()=>setModal(null)}>
+          <button onClick={handlePasteClipboard} style={{...sBtn,width:"100%",marginBottom:10,padding:"11px"}}>📋 Pegar desde portapapeles</button>
+          <textarea value={jsonInput} onChange={e=>{setJsonInput(e.target.value);setJsonError("");}}
+            placeholder="Pega aquí el JSON del backup..."
+            style={{width:"100%",minHeight:140,background:"#0f172a",border:`1px solid ${jsonError?"#ef4444":"#334155"}`,borderRadius:8,color:"#f8fafc",padding:12,fontSize:12,fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+          {jsonError&&<div style={{color:"#f87171",fontSize:13,marginTop:6}}>⚠️ {jsonError}</div>}
+          <button onClick={()=>{
+            setJsonError("");
+            try{
+              const data=JSON.parse(jsonInput.trim());
+              const arr=Array.isArray(data)?data:[data];
+              if(!arr[0]?.title)throw new Error();
+              const merged=[...trips,...arr.filter(i=>!trips.find(t=>t.id===i.id))];
+              persist(merged);setStatus(`✅ ${arr.length} viaje(s) importados`);setTimeout(()=>setStatus(""),3000);
+              setJsonInput("");setModal(null);
+            }catch{setJsonError("JSON inválido.");}
+          }} disabled={!jsonInput.trim()} style={{...pBtn,marginTop:12,width:"100%",opacity:!jsonInput.trim()?0.5:1}}>
+            ✅ Restaurar
+          </button>
+        </Modal>
+      )}
+
+      {modal==="newTrip"&&(
+        <Modal title="Nuevo viaje" onClose={()=>setModal(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:10}}>
+            <button onClick={()=>{setModal("manualTrip");setForm({});}} style={{...pBtn,padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:22}}>✏️</span>
+              <div style={{textAlign:"left"}}><div style={{fontWeight:700}}>Crear manualmente</div><div style={{fontSize:12,fontWeight:400,opacity:0.8}}>Rellena título, destino y fechas</div></div>
+            </button>
+            <button onClick={()=>{setModal("pasteTrip");setJsonInput("");setJsonError("");}} style={{...sBtn,padding:"15px 18px",display:"flex",alignItems:"center",gap:12}}>
+              <span style={{fontSize:22}}>📋</span>
+              <div style={{textAlign:"left"}}><div style={{fontWeight:700,color:"#f8fafc"}}>Pegar JSON de Claude</div><div style={{fontSize:12,fontWeight:400}}>Pega el JSON que Claude generó en el chat</div></div>
+            </button>
+          </div>
+        </Modal>
+      )}
+
+      {modal==="manualTrip"&&(
+        <Modal title="Crear viaje" onClose={()=>setModal(null)}>
+          <div style={{display:"flex",flexDirection:"column",gap:14}}>
+            <div><label style={lS}>Título *</label><input style={iS} placeholder="Ej: 3 días en Oporto" value={form.title||""} onChange={e=>setForm({...form,title:e.target.value})} autoFocus/></div>
+            <div><label style={lS}>Destino</label><input style={iS} placeholder="Ej: Oporto, Portugal" value={form.destination||""} onChange={e=>setForm({...form,destination:e.target.value})}/></div>
+            <div><label style={lS}>Desde</label><input type="date" style={{...iS,colorScheme:"dark",display:"block"}} value={form.dateFrom||""} onChange={e=>setForm({...form,dateFrom:e.target.value})}/></div>
+            <div><label style={lS}>Hasta</label><input type="date" style={{...iS,colorScheme:"dark",display:"block"}} value={form.dateTo||""} onChange={e=>setForm({...form,dateTo:e.target.value})}/></div>
+            <button onClick={handleNewTrip} disabled={!form.title?.trim()} style={{...pBtn,opacity:!form.title?.trim()?0.5:1}}>Crear viaje →</button>
+          </div>
+        </Modal>
+      )}
+
+      {modal==="pasteTrip"&&(
+        <Modal title="Pegar viaje de Claude" onClose={()=>setModal(null)}>
+          <div style={{fontSize:13,color:"#bfdbfe",background:"#1a2744",border:"1px solid #1d4ed8",borderRadius:8,padding:12,marginBottom:12,lineHeight:1.7}}>
+            Escribe en el chat de Claude: <span style={{fontFamily:"monospace",fontSize:12,background:"#0f172a",padding:"2px 6px",borderRadius:4}}>"Procesa este viaje: [tu texto]"</span> y pega el JSON aquí.
+          </div>
+          <button onClick={handlePasteClipboard} style={{...sBtn,width:"100%",marginBottom:10,padding:"11px"}}>📋 Pegar desde portapapeles</button>
+          <textarea value={jsonInput} onChange={e=>{setJsonInput(e.target.value);setJsonError("");}}
+            placeholder='{ "title": "Mi viaje", "days": [...] }'
+            style={{width:"100%",minHeight:120,background:"#0f172a",border:`1px solid ${jsonError?"#ef4444":"#334155"}`,borderRadius:8,color:"#f8fafc",padding:12,fontSize:12,fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+          {jsonError&&<div style={{color:"#f87171",fontSize:13,marginTop:6}}>⚠️ {jsonError}</div>}
+          {jsonInput&&!jsonError&&<div style={{fontSize:12,color:"#86efac",marginTop:4}}>✓ Listo</div>}
+          <button onClick={()=>{
+            setJsonError("");
+            try{
+              const trip=JSON.parse(jsonInput.trim());
+              if(!trip.title||!trip.days)throw new Error();
+              trip.id=trip.id||newId();trip.createdAt=trip.createdAt||new Date().toISOString();
+              const exists=trips.findIndex(t=>t.id===trip.id);
+              const updated=exists>=0?trips.map(t=>t.id===trip.id?trip:t):[...trips,trip];
+              persist(updated);setActiveTrip(trip);setActiveDay(0);setActiveTab("agenda");setView("trip");setModal(null);setJsonInput("");
+            }catch{setJsonError("JSON inválido.");}
+          }} disabled={!jsonInput.trim()} style={{...pBtn,marginTop:12,width:"100%",opacity:!jsonInput.trim()?0.5:1}}>✅ Importar viaje</button>
+        </Modal>
+      )}
+    </div>
+  );
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // TRIP VIEW
+  // ══════════════════════════════════════════════════════════════════════════
+  if(view==="trip"&&activeTrip){
+    const day=activeTrip.days?.[activeDay];
+    return(
+      <div style={{minHeight:"100vh",background:"#0f172a"}}>
+        {/* Topbar */}
+        <div style={{background:"#0f172a",borderBottom:"1px solid #1e293b",padding:"12px 16px",display:"flex",alignItems:"center",gap:12,position:"sticky",top:0,zIndex:100}}>
+          <button onClick={()=>setView("home")} style={{...sBtn,padding:"6px 12px",flexShrink:0}}>← Viajes</button>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontWeight:700,fontSize:15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeTrip.title}</div>
+            {activeTrip.dates&&<div style={{fontSize:11,color:"#64748b"}}>{activeTrip.dates}</div>}
+          </div>
+          <span style={{fontSize:11,color:syncing?"#64748b":"#22c55e",flexShrink:0}}>{syncing?"☁️":"☁️✓"}</span>
+        </div>
+
+        {/* Tabs */}
+        <div style={{borderBottom:"1px solid #1e293b",display:"flex",padding:"0 12px",overflowX:"auto"}}>
+          {[["agenda","📋 Agenda"],["map","🗺️ Mapa"],["events","📌 Eventos"],["landmarks","🏛️ Lugares"]].map(([k,l])=>(
+            <button key={k} onClick={()=>setActiveTab(k)}
+              style={{padding:"11px 13px",background:"none",border:"none",borderBottom:activeTab===k?"2px solid #60a5fa":"2px solid transparent",color:activeTab===k?"#60a5fa":"#64748b",cursor:"pointer",fontSize:13,fontWeight:600,whiteSpace:"nowrap"}}>
+              {l}
+            </button>
+          ))}
+        </div>
+
+        <div style={{maxWidth:800,margin:"0 auto",padding:"18px 14px 80px"}}>
+          {/* Day pills */}
+          {(activeTab==="agenda"||activeTab==="map")&&(
+            <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+              {activeTrip.days?.map((d,i)=>(
+                <button key={i} onClick={()=>setActiveDay(i)}
+                  style={{padding:"7px 14px",borderRadius:20,border:"1px solid",borderColor:activeDay===i?"#60a5fa":"#334155",background:activeDay===i?"#1d4ed8":"transparent",color:activeDay===i?"white":"#94a3b8",cursor:"pointer",fontSize:13,fontWeight:600}}>
+                  Día {d.day}
+                </button>
+              ))}
+              <button onClick={()=>{setModal("newDay");setForm({});}} style={{padding:"7px 12px",borderRadius:20,border:"1px dashed #334155",background:"transparent",color:"#475569",cursor:"pointer",fontSize:13}}>+ Día</button>
+            </div>
+          )}
+
+          {/* AGENDA */}
+          {activeTab==="agenda"&&(
+            <div>
+              {!day?(
+                <div style={{textAlign:"center",padding:"50px 0",color:"#475569"}}><div style={{fontSize:36,marginBottom:10}}>📅</div><div>Añade tu primer día con "+ Día"</div></div>
+              ):(
+                <div>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+                    <h2 style={{margin:0,fontSize:17,fontWeight:700,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{day.label}</h2>
+                    <div style={{display:"flex",gap:8,flexShrink:0,marginLeft:8}}>
+                      <button onClick={()=>{setModal("editDay");setForm({label:day.label});}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:14}}>✏️</button>
+                      <button onClick={()=>setModal("confirmDeleteDay")} style={{background:"none",border:"none",color:"#ef4444",cursor:"pointer",fontSize:14}}>🗑</button>
+                    </div>
+                  </div>
+                  {day.agenda?.map((block,bi)=>(
+                    <div key={bi} style={{marginBottom:20}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6}}>
+                          <div style={{fontSize:11,letterSpacing:2,textTransform:"uppercase",color:"#60a5fa",fontWeight:700}}>{block.time}</div>
+                          {block.fromEvent&&<span style={{fontSize:10,background:"#1d4ed8",color:"#bfdbfe",padding:"1px 6px",borderRadius:10,fontWeight:600}}>evento</span>}
+                        </div>
+                        <div style={{flex:1,height:1,background:"#1e293b"}}/>
+                        <button onClick={()=>{setModal("newItem");setForm({blockIdx:bi});}} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:12,fontWeight:700}}>+ añadir</button>
+                        <button onClick={()=>deleteBlock(bi)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12}}>✕</button>
+                      </div>
+                      {block.items?.map((item,ii)=>(
+                        <div key={ii} style={{display:"flex",gap:10,padding:"10px 13px",background:"#1e293b",borderRadius:9,marginBottom:5,borderLeft:"3px solid #334155",alignItems:"flex-start"}}>
+                          <span style={{color:"#475569",marginTop:2,flexShrink:0}}>•</span>
+                          <span style={{fontSize:14,lineHeight:1.5,color:"#e2e8f0",flex:1}}>{item}</span>
+                          <div style={{display:"flex",gap:4,flexShrink:0}}>
+                            <button onClick={()=>{setModal("editItem");setForm({blockIdx:bi,itemIdx:ii,text:item});}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:13}}>✏️</button>
+                            <button onClick={()=>deleteItem(bi,ii)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:13}}>✕</button>
+                          </div>
+                        </div>
+                      ))}
+                      {!block.items?.length&&<div style={{fontSize:13,color:"#334155",padding:"8px 13px",fontStyle:"italic"}}>Sin actividades</div>}
+                    </div>
+                  ))}
+                  <button onClick={()=>{setModal("newBlock");setForm({});}} style={{width:"100%",padding:"12px",border:"1px dashed #334155",borderRadius:10,background:"transparent",color:"#475569",cursor:"pointer",fontSize:14,marginTop:4}}>
+                    + Añadir bloque horario
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* MAP */}
+          {activeTab==="map"&&(
+            <div>
+              {!day?<div style={{textAlign:"center",padding:"50px 0",color:"#475569"}}>Añade un día primero</div>:(
+                <div>
+                  <h2 style={{margin:"0 0 14px",fontSize:17,fontWeight:700}}>{day.label}</h2>
+                  <TripMap stops={day.mapStops||[]}/>
+                  <div style={{marginTop:16}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                      <div style={{fontSize:11,color:"#64748b",textTransform:"uppercase",letterSpacing:1}}>Paradas</div>
+                      <button onClick={()=>{setModal("newStop");setForm({});}} style={{...pBtn,padding:"7px 14px",fontSize:12}}>+ Parada</button>
+                    </div>
+                    {day.mapStops?.map((s,i)=>(
+                      <div key={i} style={{display:"flex",gap:12,padding:"10px 13px",background:"#1e293b",borderRadius:8,marginBottom:6,alignItems:"center"}}>
+                        <div style={{background:"#2563eb",color:"white",borderRadius:"50%",width:24,height:24,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,fontWeight:700,flexShrink:0}}>{i+1}</div>
+                        <div style={{flex:1}}><div style={{fontWeight:600,fontSize:14}}>{s.name}</div>{s.note&&<div style={{fontSize:12,color:"#64748b"}}>{s.note}</div>}</div>
+                        <button onClick={()=>deleteStop(i)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:15}}>✕</button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* EVENTS */}
+          {activeTab==="events"&&(
+            <EventsTab events={activeTrip.fixedEvents||[]} onAdd={()=>{setModal("newEvent");setForm({type:"vuelo",date:activeTrip.dateFrom||"",dayLabel:activeTrip.days?.[0]?.label||""});}} onDelete={deleteEvent} onEdit={(idx,ev)=>{setModal("editEvent");setForm({...ev,editIdx:idx});}}/>
+          )}
+
+          {/* LANDMARKS */}
+          {activeTab==="landmarks"&&(
+            <div>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16,flexWrap:"wrap",gap:10}}>
+                <h2 style={{margin:0,fontSize:18,fontWeight:700}}>Landmarks y gastronomía</h2>
+                <button onClick={()=>{setModal("landmarks");setJsonInput("");setJsonError("");}} style={{...pBtn,padding:"8px 14px",fontSize:13}}>{activeTrip.landmarks?"🔄 Actualizar":"✨ Añadir"}</button>
+              </div>
+              {!activeTrip.landmarks?(
+                <div style={{color:"#475569",textAlign:"center",padding:40}}>
+                  <div style={{fontSize:36,marginBottom:10}}>🏛️</div>
+                  <div style={{fontSize:14,marginBottom:14}}>Pide a Claude landmarks de {activeTrip.destination||"tu destino"}</div>
+                  <div style={{background:"#1a2744",border:"1px solid #1d4ed8",borderRadius:10,padding:14,textAlign:"left",fontSize:13,color:"#bfdbfe",lineHeight:1.8}}>
+                    En el chat escribe:<br/>
+                    <span style={{fontFamily:"monospace",fontSize:12,background:"#0f172a",padding:"2px 6px",borderRadius:4}}>"Dame landmarks y gastronomía de {activeTrip.destination||"..."} en JSON"</span>
+                  </div>
+                </div>
+              ):(
+                <div>
+                  {activeTrip.landmarks.tips?.length>0&&(
+                    <div style={{background:"#1a2744",border:"1px solid #1d4ed8",borderRadius:12,padding:14,marginBottom:18}}>
+                      <div style={{fontSize:11,color:"#60a5fa",fontWeight:700,letterSpacing:1,textTransform:"uppercase",marginBottom:8}}>💡 Consejos</div>
+                      {activeTrip.landmarks.tips.map((t,i)=><div key={i} style={{fontSize:13,color:"#bfdbfe",marginBottom:5,paddingLeft:10,borderLeft:"2px solid #1d4ed8"}}>{t}</div>)}
+                    </div>
+                  )}
+                  <div style={{fontSize:11,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🏛️ Landmarks</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10,marginBottom:18}}>
+                    {activeTrip.landmarks.landmarks?.map((lm,i)=>(
+                      <div key={i} style={{background:"#1e293b",borderRadius:10,padding:14}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><div style={{fontWeight:700,fontSize:14}}>{lm.name}</div><span style={{...bdg,fontSize:10}}>{lm.type}</span></div>
+                        <div style={{fontSize:13,color:"#94a3b8",lineHeight:1.5,marginBottom:8}}>{lm.description}</div>
+                        {lm.tip&&<div style={{fontSize:12,color:"#60a5fa",background:"#0f1f3d",padding:"6px 10px",borderRadius:6}}>💡 {lm.tip}</div>}
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{fontSize:11,color:"#64748b",fontWeight:700,textTransform:"uppercase",letterSpacing:1,marginBottom:10}}>🍽️ Gastronomía</div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+                    {activeTrip.landmarks.food?.map((f,i)=>(
+                      <div key={i} style={{background:"#1e293b",borderRadius:10,padding:14,borderLeft:f.mustTry?"3px solid #f59e0b":"3px solid #334155"}}>
+                        <div style={{display:"flex",justifyContent:"space-between",marginBottom:6}}><div style={{fontWeight:700,fontSize:14}}>{f.name}</div>{f.mustTry&&<span style={{...bdg,background:"#451a03",color:"#fbbf24",fontSize:10}}>Must try</span>}</div>
+                        <div style={{fontSize:13,color:"#94a3b8",lineHeight:1.5}}>{f.description}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* ── MODALS ── */}
+        {modal==="editDay"&&(
+          <Modal title="Editar día" onClose={()=>setModal(null)}>
+            <label style={lS}>Nombre</label>
+            <input style={iS} value={form.label||""} onChange={e=>setForm({...form,label:e.target.value})} autoFocus/>
+            <button onClick={()=>{if(!form.label?.trim())return;updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,label:form.label.trim()}:d)});setModal(null);setForm({});}} style={{...pBtn,marginTop:14,width:"100%"}}>Guardar</button>
+          </Modal>
+        )}
+        {modal==="confirmDeleteDay"&&(
+          <Modal title="Eliminar día" onClose={()=>setModal(null)}>
+            <div style={{fontSize:14,color:"#e2e8f0",marginBottom:16}}>¿Eliminar <b>{activeTrip.days[activeDay]?.label}</b>? Se perderán todas sus actividades.</div>
+            <div style={{display:"flex",gap:10}}>
+              <button onClick={()=>setModal(null)} style={{...sBtn,flex:1}}>Cancelar</button>
+              <button onClick={()=>{deleteDay(activeDay);setModal(null);}} style={{flex:1,padding:"10px",background:"#dc2626",color:"white",border:"none",borderRadius:8,cursor:"pointer",fontSize:13,fontWeight:700}}>Eliminar</button>
+            </div>
+          </Modal>
+        )}
+        {modal==="newDay"&&(
+          <Modal title="Nuevo día" onClose={()=>setModal(null)}>
+            <div style={{display:"flex",flexDirection:"column",gap:14}}>
+              <div><label style={lS}>Nombre *</label><input style={iS} placeholder="Ej: Día 0: Llegada / Tránsito" value={form.label||""} onChange={e=>setForm({...form,label:e.target.value})} autoFocus/></div>
+              <div>
+                <label style={lS}>Insertar en posición</label>
+                <div style={{display:"flex",flexDirection:"column",gap:6,maxHeight:180,overflowY:"auto"}}>
+                  <button onClick={()=>setForm({...form,insertAfter:0})} style={{padding:"9px 12px",borderRadius:8,border:"1px solid",borderColor:form.insertAfter===0?"#60a5fa":"#334155",background:form.insertAfter===0?"#1d4ed8":"#0f172a",color:form.insertAfter===0?"white":"#94a3b8",cursor:"pointer",fontSize:13,textAlign:"left"}}>Al principio</button>
+                  {(activeTrip.days||[]).map((d,i)=>(
+                    <button key={i} onClick={()=>setForm({...form,insertAfter:i+1})} style={{padding:"9px 12px",borderRadius:8,border:"1px solid",borderColor:form.insertAfter===i+1?"#60a5fa":"#334155",background:form.insertAfter===i+1?"#1d4ed8":"#0f172a",color:form.insertAfter===i+1?"white":"#94a3b8",cursor:"pointer",fontSize:13,textAlign:"left"}}>Después de {d.label}</button>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handleNewDay} disabled={!form.label?.trim()||form.insertAfter===undefined} style={{...pBtn,opacity:(!form.label?.trim()||form.insertAfter===undefined)?0.5:1}}>Añadir día</button>
+            </div>
+          </Modal>
+        )}
+        {modal==="newBlock"&&(
+          <Modal title="Nuevo bloque horario" onClose={()=>setModal(null)}>
+            <label style={lS}>Hora o nombre *</label>
+            <input style={iS} placeholder="Ej: 09:00, Mañana, Tarde..." value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})} autoFocus/>
+            <div style={{marginTop:12}}>
+              <div style={{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Opciones rápidas</div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:7}}>
+                {BLOCK_QUICK.map(q=>(
+                  <button key={q} onClick={()=>setForm({...form,time:q})} style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:form.time===q?"#60a5fa":"#334155",background:form.time===q?"#1d4ed8":"#0f172a",color:form.time===q?"white":"#94a3b8",cursor:"pointer",fontSize:13}}>
+                    {q}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <button onClick={handleNewBlock} disabled={!form.time?.trim()} style={{...pBtn,marginTop:16,width:"100%",opacity:!form.time?.trim()?0.5:1}}>Añadir bloque</button>
+          </Modal>
+        )}
+        {modal==="newItem"&&(
+          <Modal title="Nueva actividad" onClose={()=>setModal(null)}>
+            <label style={lS}>Descripción *</label>
+            <textarea style={{...iS,minHeight:80,resize:"vertical"}} placeholder="Ej: Visita al Museo" value={form.text||""} onChange={e=>setForm({...form,text:e.target.value})} autoFocus/>
+            <button onClick={handleNewItem} disabled={!form.text?.trim()} style={{...pBtn,marginTop:14,width:"100%",opacity:!form.text?.trim()?0.5:1}}>Añadir</button>
+          </Modal>
+        )}
+        {modal==="editItem"&&(
+          <Modal title="Editar actividad" onClose={()=>setModal(null)}>
+            <label style={lS}>Descripción</label>
+            <textarea style={{...iS,minHeight:80,resize:"vertical"}} value={form.text||""} onChange={e=>setForm({...form,text:e.target.value})} autoFocus/>
+            <button onClick={handleEditItem} disabled={!form.text?.trim()} style={{...pBtn,marginTop:14,width:"100%",opacity:!form.text?.trim()?0.5:1}}>Guardar</button>
+          </Modal>
+        )}
+        {modal==="newEvent"&&(
+          <Modal title="Nuevo evento" onClose={()=>setModal(null)}>
+            <EventFormFields onSubmit={handleNewEvent} submitLabel="Añadir evento"/>
+          </Modal>
+        )}
+        {modal==="editEvent"&&(
+          <Modal title="Editar evento" onClose={()=>setModal(null)}>
+            <EventFormFields onSubmit={handleEditEvent} submitLabel="Guardar cambios"/>
+          </Modal>
+        )}
+        {modal==="newStop"&&(
+          <Modal title="Nueva parada" onClose={()=>setModal(null)}>
+            <div style={{display:"flex",flexDirection:"column",gap:12}}>
+              <div><label style={lS}>Nombre *</label><input style={iS} placeholder="Ej: Sagrada Família" value={form.name||""} onChange={e=>setForm({...form,name:e.target.value})} autoFocus/></div>
+              <div><label style={lS}>Nota</label><input style={iS} placeholder="Ej: Comprar entradas online" value={form.note||""} onChange={e=>setForm({...form,note:e.target.value})}/></div>
+              <div style={{display:"flex",gap:10}}>
+                <div style={{flex:1}}><label style={lS}>Latitud</label><input style={iS} type="number" step="any" placeholder="41.40" value={form.lat||""} onChange={e=>setForm({...form,lat:e.target.value})}/></div>
+                <div style={{flex:1}}><label style={lS}>Longitud</label><input style={iS} type="number" step="any" placeholder="2.17" value={form.lng||""} onChange={e=>setForm({...form,lng:e.target.value})}/></div>
+              </div>
+              <div style={{fontSize:12,color:"#475569"}}>💡 Google Maps → mantén pulsado → copia lat/lng</div>
+              <button onClick={handleNewStop} disabled={!form.name?.trim()} style={{...pBtn,opacity:!form.name?.trim()?0.5:1}}>Añadir parada</button>
+            </div>
+          </Modal>
+        )}
+        {modal==="landmarks"&&(
+          <Modal title="Importar Landmarks" onClose={()=>setModal(null)}>
+            <div style={{fontSize:13,color:"#bfdbfe",background:"#1a2744",border:"1px solid #1d4ed8",borderRadius:8,padding:12,marginBottom:12,lineHeight:1.7}}>
+              En el chat: <span style={{fontFamily:"monospace",fontSize:12}}>"Dame landmarks y gastronomía de {activeTrip.destination} en JSON"</span>
+            </div>
+            <textarea value={jsonInput} onChange={e=>{setJsonInput(e.target.value);setJsonError("");}}
+              placeholder='{ "landmarks": [...], "food": [...], "tips": [...] }'
+              style={{width:"100%",minHeight:140,background:"#0f172a",border:`1px solid ${jsonError?"#ef4444":"#334155"}`,borderRadius:8,color:"#f8fafc",padding:12,fontSize:12,fontFamily:"monospace",resize:"vertical",boxSizing:"border-box"}}/>
+            {jsonError&&<div style={{color:"#f87171",fontSize:13,marginTop:6}}>⚠️ {jsonError}</div>}
+            <button onClick={handleImportLandmarks} disabled={!jsonInput.trim()} style={{...pBtn,marginTop:12,width:"100%",opacity:!jsonInput.trim()?0.5:1}}>✅ Importar</button>
+          </Modal>
+        )}
+      </div>
+    );
+  }
+  return null;
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
