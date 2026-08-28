@@ -29,50 +29,58 @@
 const { useState, useEffect, useRef } = React;
 
 // ─── GITHUB GIST STORAGE ───────────────────────────────────────────────────
-const GITHUB_TOKEN = "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";
-const GIST_FILENAME = "travel-organizer-data.json";
-const LOCAL_KEY = "travel_organizer_v1";
+const GITHUB_TOKEN = "REEMPLAZA_CON_TU_TOKEN";
+let currentUser = null;
 let gistId = null;
 
+function getFilename(user) { return `travel-organizer-${user.toLowerCase().replace(/[^a-z0-9]/g,"-")}.json`; }
+function getLocalKey(user) { return `travel_organizer_${user.toLowerCase()}`; }
+
 function localSave(trips) {
-  try { localStorage.setItem(LOCAL_KEY, JSON.stringify(trips)); } catch {}
+  if(!currentUser) return;
+  try { localStorage.setItem(getLocalKey(currentUser), JSON.stringify(trips)); } catch {}
 }
 function localLoad() {
-  try { const r = localStorage.getItem(LOCAL_KEY); if (r) return JSON.parse(r); } catch {}
+  if(!currentUser) return null;
+  try { const r = localStorage.getItem(getLocalKey(currentUser)); if(r) return JSON.parse(r); } catch {}
   return null;
 }
-async function gistLoad() {
+async function gistLoad(user) {
+  const filename = getFilename(user);
   const res = await fetch("https://api.github.com/gists", {
     headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
   });
-  if (!res.ok) throw new Error(`GitHub ${res.status}`);
+  if(!res.ok) throw new Error(`GitHub ${res.status}`);
   const gists = await res.json();
-  const found = gists.find(g => g.files[GIST_FILENAME]);
-  if (!found) return null;
+  const found = gists.find(g => g.files[filename]);
+  if(!found) { gistId = null; return null; }
   gistId = found.id;
   const res2 = await fetch(`https://api.github.com/gists/${gistId}`, {
     headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
   });
   const data = await res2.json();
-  const raw = data.files[GIST_FILENAME]?.content;
+  const raw = data.files[filename]?.content;
   return raw ? JSON.parse(raw) : null;
 }
-async function gistSave(trips) {
+async function gistSave(trips, user) {
+  const filename = getFilename(user || currentUser);
   const content = JSON.stringify(trips, null, 2);
   const headers = { "Authorization": `token ${GITHUB_TOKEN}`, "Content-Type": "application/json", "Accept": "application/vnd.github.v3+json" };
-  if (gistId) {
-    await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [GIST_FILENAME]:{ content } } }) });
+  if(gistId) {
+    await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [filename]:{ content } } }) });
   } else {
-    const res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:"Travel Organizer", public:false, files:{ [GIST_FILENAME]:{ content } } }) });
+    const res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:`Travel Organizer - ${user||currentUser}`, public:false, files:{ [filename]:{ content } } }) });
     const d = await res.json(); gistId = d.id;
   }
 }
-function saveTrips(trips) { 
-  localSave(trips); 
-  gistSave(trips)
-    .then(()=>{ document.title = "✅ Gist OK"; })
-    .catch(e=>{ document.title = "❌ "+e.message; alert("Error: "+e.message); }); 
+function saveTrips(trips) {
+  if(!currentUser) return;
+  localSave(trips);
+  gistSave(trips, currentUser)
+    .then(()=>{ document.title = "☁️ Guardado"; setTimeout(()=>document.title="Travel Organizer",2000); })
+    .catch(e=>{ console.error("Gist error:", e.message); document.title = "❌ Error al guardar"; });
 }
+
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 const newId = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmtDate = d => { if(!d)return""; const[y,m,dd]=d.split("-"); return`${dd}/${m}/${y}`; };
@@ -232,20 +240,31 @@ function App(){
   const [jsonError,setJsonError]=useState("");
   const [status,setStatus]=useState("");
   const [syncing,setSyncing]=useState(false);
+  const [username,setUsername]=useState("");
+  const [usernameInput,setUsernameInput]=useState("");
+  const [loginError,setLoginError]=useState("");
 
   // ── Load ──────────────────────────────────────────────────────────────────
-  useEffect(()=>{
-    const local=localLoad()||[];
-    if(local.length){setTrips(local);setInitialized(true);}
+  const loadUserData = (user) => {
+    currentUser = user;
+    gistId = null;
+    const local = localLoad() || [];
+    if(local.length){ setTrips(local); setInitialized(true); }
     setSyncing(true);
-    gistLoad().then(cloud=>{
-      if(cloud&&cloud.length>0){
-        if(cloud.length>=local.length){setTrips(cloud);localSave(cloud);}
-        else gistSave(local).catch(()=>{});
-      } else if(local.length>0){
-        gistSave(local).catch(()=>{});
+    gistLoad(user).then(cloud=>{
+      if(cloud && cloud.length > 0){
+        if(cloud.length >= local.length){ setTrips(cloud); localSave(cloud); }
+        else gistSave(local, user).catch(()=>{});
+      } else if(local.length > 0){
+        gistSave(local, user).catch(()=>{});
       }
-    }).catch(()=>{}).finally(()=>{setSyncing(false);setInitialized(true);});
+    }).catch(e=>{ console.error("Load error:", e.message); })
+    .finally(()=>{ setSyncing(false); setInitialized(true); });
+  };
+
+  useEffect(()=>{
+    // Don't load until user is selected
+    if(currentUser) loadUserData(currentUser);
   },[]);
 
   const persist=(updated)=>{
@@ -399,10 +418,39 @@ function App(){
     catch{setJsonError("No se pudo acceder al portapapeles. Pega manualmente.");}
   };
 
+  // Login screen
+  if(!username) return (
+    <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0f172a",padding:24}}>
+      <div style={{width:"100%",maxWidth:360,textAlign:"center"}}>
+        <div style={{fontSize:52,marginBottom:16}}>🌍</div>
+        <h1 style={{margin:"0 0 6px",fontSize:28,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Travel Organizer</h1>
+        <p style={{color:"#64748b",fontSize:14,marginBottom:32}}>¿Quién va a planificar viajes hoy?</p>
+        <input
+          value={usernameInput}
+          onChange={e=>setUsernameInput(e.target.value)}
+          onKeyDown={e=>{ if(e.key==="Enter"&&usernameInput.trim()){ const u=usernameInput.trim(); setUsername(u); loadUserData(u); } }}
+          placeholder="Tu nombre o apodo..."
+          autoFocus
+          style={{...iS,fontSize:16,padding:"14px 16px",textAlign:"center",marginBottom:12,borderRadius:12}}
+        />
+        {loginError&&<div style={{color:"#f87171",fontSize:13,marginBottom:10}}>⚠️ {loginError}</div>}
+        <button onClick={()=>{
+          if(!usernameInput.trim()){setLoginError("Escribe tu nombre para continuar");return;}
+          const u=usernameInput.trim();
+          setUsername(u);
+          loadUserData(u);
+        }} style={{...pBtn,width:"100%",padding:"14px",fontSize:15,borderRadius:12}}>
+          Entrar →
+        </button>
+        <p style={{color:"#334155",fontSize:12,marginTop:20}}>Cada usuario tiene sus propios viajes guardados en la nube.</p>
+      </div>
+    </div>
+  );
+
   if(!initialized)return(
     <div style={{minHeight:"100vh",display:"flex",alignItems:"center",justifyContent:"center",background:"#0f172a",color:"#94a3b8",flexDirection:"column",gap:12}}>
       <div style={{fontSize:32}}>🌍</div>
-      <div style={{fontSize:14}}>Cargando viajes...</div>
+      <div style={{fontSize:14}}>Cargando viajes de {username}...</div>
     </div>
   );
 
@@ -453,10 +501,11 @@ function App(){
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",flexWrap:"wrap",gap:10}}>
           <div>
             <div style={{fontSize:11,letterSpacing:3,color:"#475569",textTransform:"uppercase",marginBottom:5}}>Tu cuaderno de</div>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <h1 style={{margin:0,fontSize:34,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Viajes</h1>
-              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sincronizando...":"☁️ guardado"}</span>
+              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sync...":"☁️ guardado"}</span>
             </div>
+            <div style={{fontSize:12,color:"#64748b",marginTop:4}}>👤 {username} · <span style={{color:"#2563eb",cursor:"pointer"}} onClick={()=>{ setUsername(""); setUsernameInput(""); setTrips([]); setInitialized(false); currentUser=null; gistId=null; }}>Cambiar</span></div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             <button onClick={()=>setModal("backup")} style={sBtn}>⬇ Backup</button>
