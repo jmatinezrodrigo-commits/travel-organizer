@@ -67,8 +67,12 @@ async function gistSave(trips) {
     const d = await res.json(); gistId = d.id;
   }
 }
-function saveTrips(trips) { localSave(trips); gistSave(trips).catch(()=>{}); }
-
+function saveTrips(trips) { 
+  localSave(trips); 
+  gistSave(trips)
+    .then(()=>{ document.title = "✅ Gist OK"; })
+    .catch(e=>{ document.title = "❌ "+e.message; alert("Error: "+e.message); }); 
+}
 // ─── HELPERS ───────────────────────────────────────────────────────────────
 const newId = () => Date.now().toString(36)+Math.random().toString(36).slice(2,6);
 const fmtDate = d => { if(!d)return""; const[y,m,dd]=d.split("-"); return`${dd}/${m}/${y}`; };
