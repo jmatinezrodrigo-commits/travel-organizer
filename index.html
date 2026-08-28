@@ -66,13 +66,20 @@ async function gistSave(trips, user) {
   const filename = getFilename(user || currentUser);
   const content = JSON.stringify(trips, null, 2);
   const headers = { "Authorization": `token ${GITHUB_TOKEN}`, "Content-Type": "application/json", "Accept": "application/vnd.github.v3+json" };
+  let res;
   if(gistId) {
-    await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [filename]:{ content } } }) });
+    res = await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [filename]:{ content } } }) });
   } else {
-    const res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:`Travel Organizer - ${user||currentUser}`, public:false, files:{ [filename]:{ content } } }) });
-    const d = await res.json(); gistId = d.id;
+    res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:`Travel Organizer - ${user||currentUser}`, public:false, files:{ [filename]:{ content } } }) });
   }
+  if(!res.ok) {
+    const err = await res.json().catch(()=>({}));
+    throw new Error(`GitHub ${res.status}: ${err.message||"error desconocido"}`);
+  }
+  const d = await res.json();
+  if(!gistId) gistId = d.id;
 }
+
 function saveTrips(trips) {
   if(!currentUser) return;
   localSave(trips);
@@ -270,14 +277,23 @@ function App(){
   const persist=(updated)=>{
     setTrips(updated);
     localSave(updated);
-    gistSave(updated).catch(()=>{});
+    setSyncing(true);
+    gistSave(updated)
+      .then(()=>{ setSyncing(false); setStatus("☁️ Guardado ✓"); setTimeout(()=>setStatus(""),2500); })
+      .catch(e=>{ setSyncing(false); setStatus("❌ "+e.message); console.error("Save error:",e.message); });
     if(activeTrip){const r=updated.find(t=>t.id===activeTrip.id);if(r)setActiveTrip(r);}
   };
+
   const updateActiveTrip=(trip)=>{
     setActiveTrip(trip);
     const updated=trips.map(t=>t.id===trip.id?trip:t);
-    setTrips(updated); localSave(updated); gistSave(updated).catch(()=>{});
+    setTrips(updated); localSave(updated);
+    setSyncing(true);
+    gistSave(updated)
+      .then(()=>{ setSyncing(false); setStatus("☁️ Guardado ✓"); setTimeout(()=>setStatus(""),2500); })
+      .catch(e=>{ setSyncing(false); setStatus("❌ "+e.message); console.error("Save error:",e.message); });
   };
+
 
   // ── Trip handlers ─────────────────────────────────────────────────────────
   const handleNewTrip=()=>{
@@ -503,7 +519,7 @@ function App(){
             <div style={{fontSize:11,letterSpacing:3,color:"#475569",textTransform:"uppercase",marginBottom:5}}>Tu cuaderno de</div>
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <h1 style={{margin:0,fontSize:34,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Viajes</h1>
-              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sync...":"☁️ guardado"}</span>
+              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sync...":"☁️ listo"}</span>
             </div>
             <div style={{fontSize:12,color:"#64748b",marginTop:4}}>👤 {username} · <span style={{color:"#2563eb",cursor:"pointer"}} onClick={()=>{ setUsername(""); setUsernameInput(""); setTrips([]); setInitialized(false); currentUser=null; gistId=null; }}>Cambiar</span></div>
           </div>
