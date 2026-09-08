@@ -252,16 +252,16 @@ function App(){
     if(local.length){ setTrips(local); setInitialized(true); }
     setSyncing(true);
     gistLoad(user).then(cloud=>{
+      setStatus("Gist: "+(cloud?cloud.length+" viajes":"null"));
       if(cloud && cloud.length > 0){
-        if(cloud.length >= local.length){ setTrips(cloud); localSave(cloud); }
-        else gistSave(local, user).catch(()=>{});
+        setTrips(cloud); localSave(cloud);
       } else if(local.length > 0){
         gistSave(local, user).catch(()=>{});
       }
-    }).catch(e=>{ console.error("Load error:", e.message); })
+    }).catch(e=>{ setStatus("Error carga: "+e.message); })
     .finally(()=>{ setSyncing(false); setInitialized(true); });
   };
-
+ 
   useEffect(()=>{
     // Don't load until user is selected
     if(currentUser) loadUserData(currentUser);
