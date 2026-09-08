@@ -454,8 +454,9 @@ function App(){
     </div>
   );
 
-  // ── EVENT FORM FIELDS (reused in new + edit) ──────────────────────────────
-  const EventFormFields=({onSubmit,submitLabel})=>(
+// ── EVENT FORM FIELDS (reused in new + edit) ──────────────────────────────
+function EventFormFields({form,setForm,activeTrip,onSubmit,submitLabel}){
+  return (
     <div style={{display:"flex",flexDirection:"column",gap:12}}>
       <div>
         <label style={lS}>Tipo</label>
@@ -491,6 +492,8 @@ function App(){
       <button onClick={onSubmit} disabled={!form.description?.trim()} style={{...pBtn,opacity:!form.description?.trim()?0.5:1}}>{submitLabel}</button>
     </div>
   );
+}
+
 
   // ══════════════════════════════════════════════════════════════════════════
   // HOME
@@ -866,16 +869,55 @@ function App(){
             <button onClick={handleEditItem} disabled={!form.text?.trim()} style={{...pBtn,marginTop:14,width:"100%",opacity:!form.text?.trim()?0.5:1}}>Guardar</button>
           </Modal>
         )}
+// ── EVENT FORM FIELDS (reused in new + edit) ──────────────────────────────
+  const EventFormFields=({onSubmit,submitLabel})=>(
+    <div style={{display:"flex",flexDirection:"column",gap:12}}>
+      <div>
+        <label style={lS}>Tipo</label>
+        <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+          {[["vuelo","✈️"],["tren","🚂"],["bus","🚌"],["hotel","🏨"],["evento","📌"]].map(([t,ic])=>(
+            <button key={t} onClick={()=>setForm({...form,type:t})}
+              style={{padding:"7px 10px",borderRadius:8,border:"1px solid",borderColor:form.type===t?"#60a5fa":"#334155",background:form.type===t?"#1d4ed8":"transparent",color:form.type===t?"white":"#94a3b8",cursor:"pointer",fontSize:13}}>
+              {ic} {t}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div><label style={lS}>Descripción *</label><input style={iS} placeholder="Ej: Vuelo MAD-OPO" value={form.description||""} onChange={e=>setForm({...form,description:e.target.value})}/></div>
+      <div style={{display:"flex",gap:10}}>
+        <div style={{flex:1}}><label style={lS}>Fecha</label><input type="date" style={{...iS,colorScheme:"dark",display:"block"}} value={form.date||""} onChange={e=>setForm({...form,date:e.target.value})}/></div>
+        <div style={{flex:1}}><label style={lS}>Hora salida</label><input type="time" style={{...iS,colorScheme:"dark",display:"block"}} value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})}/></div>
+      </div>
+      {["vuelo","tren","bus"].includes(form.type)&&(
+        <div><label style={lS}>Hora llegada</label><input type="time" style={{...iS,colorScheme:"dark",display:"block"}} value={form.arrivalTime||""} onChange={e=>setForm({...form,arrivalTime:e.target.value})}/></div>
+      )}
+      <div>
+        <label style={lS}>Día del viaje</label>
+        {!(activeTrip?.days||[]).length
+          ?<div style={{fontSize:12,color:"#475569",fontStyle:"italic"}}>Añade días al viaje primero</div>
+          :<div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+            <button onClick={()=>setForm({...form,dayLabel:""})} style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:!form.dayLabel?"#60a5fa":"#334155",background:!form.dayLabel?"#1d4ed8":"transparent",color:!form.dayLabel?"white":"#94a3b8",cursor:"pointer",fontSize:12}}>Sin día</button>
+            {(activeTrip?.days||[]).map((d,i)=>(
+              <button key={i} onClick={()=>setForm({...form,dayLabel:d.label})} style={{padding:"6px 12px",borderRadius:20,border:"1px solid",borderColor:form.dayLabel===d.label?"#60a5fa":"#334155",background:form.dayLabel===d.label?"#1d4ed8":"transparent",color:form.dayLabel===d.label?"white":"#94a3b8",cursor:"pointer",fontSize:12}}>Día {d.day}</button>
+            ))}
+          </div>
+        }
+      </div>
+      <button onClick={onSubmit} disabled={!form.description?.trim()} style={{...pBtn,opacity:!form.description?.trim()?0.5:1}}>{submitLabel}</button>
+    </div>
+  );
+
         {modal==="newEvent"&&(
           <Modal title="Nuevo evento" onClose={()=>setModal(null)}>
-            <EventFormFields onSubmit={handleNewEvent} submitLabel="Añadir evento"/>
+            <EventFormFields form={form} setForm={setForm} activeTrip={activeTrip} onSubmit={handleNewEvent} submitLabel="Añadir evento"/>
           </Modal>
         )}
         {modal==="editEvent"&&(
           <Modal title="Editar evento" onClose={()=>setModal(null)}>
-            <EventFormFields onSubmit={handleEditEvent} submitLabel="Guardar cambios"/>
+            <EventFormFields form={form} setForm={setForm} activeTrip={activeTrip} onSubmit={handleEditEvent} submitLabel="Guardar cambios"/>
           </Modal>
         )}
+
         {modal==="newStop"&&(
           <Modal title="Nueva parada" onClose={()=>setModal(null)}>
             <div style={{display:"flex",flexDirection:"column",gap:12}}>
