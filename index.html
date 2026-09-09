@@ -270,7 +270,7 @@ function EventFormFields({onSubmit,submitLabel,form,setForm,activeTrip}){
 function App(){
   const [trips,setTrips]=useState([]);
   const [activeTrip,setActiveTrip]=useState(null);
-  const [activeDay,setActiveDay]=useState(0);
+  const [activeDay,setActiveDay]=useState(-1); // -1 = Resumen, >= 0 = día específico
   const [activeTab,setActiveTab]=useState("agenda");
   const [view,setView]=useState("home");
   const [initialized,setInitialized]=useState(false);
@@ -278,7 +278,7 @@ function App(){
   const [form,setForm]=useState({});
   const [jsonInput,setJsonInput]=useState("");
   const [jsonError,setJsonError]=useState("");
-  const [status,setStatus]=useState("");
+  const [status,setStatus]=setStatus=useState("");
   const [syncing,setSyncing]=useState(false);
   const [username,setUsername]=useState("");
   const [usernameInput,setUsernameInput]=useState("");
@@ -339,7 +339,7 @@ function App(){
     const trip={id:newId(),title:form.title.trim(),destination:form.destination?.trim()||"",dates,dateFrom:form.dateFrom||"",dateTo:form.dateTo||"",createdAt:new Date().toISOString(),days:autoDays,fixedEvents:[],landmarks:null};
     const updated=[...trips,trip];
     persist(updated);
-    setActiveTrip(trip);setActiveDay(0);setActiveTab("agenda");setView("trip");setModal(null);setForm({});
+    setActiveTrip(trip);setActiveDay(trip.days?.length ? 0 : -1);setActiveTab("agenda");setView("trip");setModal(null);setForm({});
   };
 
   const handleNewDay=()=>{
@@ -356,9 +356,27 @@ function App(){
     if(!form.time?.trim())return;
     const day=activeTrip.days[activeDay];
     const block={id:newId(),time:form.time.trim(),items:[]};
-    const sorted=[...(day.agenda||[]),block].sort((a,b)=>sortBlock(a)-sortBlock(b));
-    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:sorted}:d)});
+    const updatedAgenda=[...(day.agenda||[]),block];
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
     setModal(null);setForm({});
+  };
+
+  const handleEditBlock=()=>{
+    if(!form.time?.trim())return;
+    const day=activeTrip.days[activeDay];
+    const updatedAgenda=day.agenda.map((b,bi)=>bi!==form.blockIdx?b:{...b,time:form.time.trim()});
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
+    setModal(null);setForm({});
+  };
+
+  const moveBlock=(bi,dir)=>{
+    const day=activeTrip.days[activeDay];
+    const targetIdx=bi+dir;
+    if(targetIdx<0||targetIdx>=day.agenda.length)return;
+    const updatedAgenda=[...day.agenda];
+    const [moved]=updatedAgenda.splice(bi,1);
+    updatedAgenda.splice(targetIdx,0,moved);
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
   };
 
   const handleNewItem=()=>{
@@ -388,7 +406,7 @@ function App(){
   };
   const deleteDay=(di)=>{
     const updatedDays=activeTrip.days.filter((_,i)=>i!==di).map((d,i)=>({...d,day:i+1}));
-    setActiveDay(Math.max(0,Math.min(activeDay,updatedDays.length-1)));
+    setActiveDay(updatedDays.length?Math.max(0,Math.min(activeDay,updatedDays.length-1)):-1);
     updateActiveTrip({...activeTrip,days:updatedDays});
   };
 
@@ -439,10 +457,14 @@ function App(){
   const handleNewStop=()=>{
     if(!form.name?.trim())return;
     const stop={id:newId(),name:form.name.trim(),note:form.note?.trim()||"",lat:form.lat?parseFloat(form.lat):null,lng:form.lng?parseFloat(form.lng):null};
-    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,mapStops:[...(d.mapStops||[]),stop]}:d)});
+    const curIdx=activeDay<0?0:activeDay;
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===curIdx?{...d,mapStops:[...(d.mapStops||[]),stop]}:d)});
     setModal(null);setForm({});
   };
-  const deleteStop=(i)=>updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,di)=>di===activeDay?{...d,mapStops:d.mapStops.filter((_,ii)=>ii!==i)}:d)});
+  const deleteStop=(i)=>{
+    const curIdx=activeDay<0?0:activeDay;
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,di)=>di===curIdx?{...d,mapStops:d.mapStops.filter((_,ii)=>ii!==i)}:d)});
+  };
 
   const handleImportLandmarks=()=>{
     setJsonError("");
@@ -497,8 +519,6 @@ function App(){
     </div>
   );
 
-  // EventFormFields moved outside App component
-
   // ══════════════════════════════════════════════════════════════════════════
   // HOME
   // ══════════════════════════════════════════════════════════════════════════
@@ -533,7 +553,7 @@ function App(){
         ):(
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
             {trips.map(t=>(
-              <div key={t.id} onClick={()=>{setActiveTrip(t);setActiveDay(0);setActiveTab("agenda");setView("trip");}}
+              <div key={t.id} onClick={()=>{setActiveTrip(t);setActiveDay(t.days?.length ? -1 : -1);setActiveTab("agenda");setView("trip");}}
                 style={{background:"#1e293b",borderRadius:14,padding:16,cursor:"pointer",border:"1px solid #334155"}}>
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <span style={{fontSize:26}}>{DEST_EMOJI(t.destination)}</span>
@@ -634,7 +654,7 @@ function App(){
               trip.id=trip.id||newId();trip.createdAt=trip.createdAt||new Date().toISOString();
               const exists=trips.findIndex(t=>t.id===trip.id);
               const updated=exists>=0?trips.map(t=>t.id===trip.id?trip:t):[...trips,trip];
-              persist(updated);setActiveTrip(trip);setActiveDay(0);setActiveTab("agenda");setView("trip");setModal(null);setJsonInput("");
+              persist(updated);setActiveTrip(trip);setActiveDay(-1);setActiveTab("agenda");setView("trip");setModal(null);setJsonInput("");
             }catch{setJsonError("JSON inválido.");}
           }} disabled={!jsonInput.trim()} style={{...pBtn,marginTop:12,width:"100%",opacity:!jsonInput.trim()?0.5:1}}>✅ Importar viaje</button>
         </Modal>
@@ -646,7 +666,9 @@ function App(){
   // TRIP VIEW
   // ══════════════════════════════════════════════════════════════════════════
   if(view==="trip"&&activeTrip){
-    const day=activeTrip.days?.[activeDay];
+    const day=activeDay>=0?activeTrip.days?.[activeDay]:null;
+    const allStops = activeTrip.days?.flatMap(d=>d.mapStops||[]) || [];
+
     return(
       <div style={{minHeight:"100vh",background:"#0f172a"}}>
         {/* Topbar */}
@@ -673,6 +695,10 @@ function App(){
           {/* Day pills */}
           {(activeTab==="agenda"||activeTab==="map")&&(
             <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+              <button onClick={()=>setActiveDay(-1)}
+                style={{padding:"7px 14px",borderRadius:20,border:"1px solid",borderColor:activeDay===-1?"#60a5fa":"#334155",background:activeDay===-1?"#1d4ed8":"transparent",color:activeDay===-1?"white":"#94a3b8",cursor:"pointer",fontSize:13,fontWeight:600}}>
+                📋 Resumen
+              </button>
               {activeTrip.days?.map((d,i)=>(
                 <button key={i} onClick={()=>setActiveDay(i)}
                   style={{padding:"7px 14px",borderRadius:20,border:"1px solid",borderColor:activeDay===i?"#60a5fa":"#334155",background:activeDay===i?"#1d4ed8":"transparent",color:activeDay===i?"white":"#94a3b8",cursor:"pointer",fontSize:13,fontWeight:600}}>
@@ -686,7 +712,39 @@ function App(){
           {/* AGENDA */}
           {activeTab==="agenda"&&(
             <div>
-              {!day?(
+              {activeDay===-1?(
+                <div>
+                  <h2 style={{margin:"0 0 16px",fontSize:18,fontWeight:700,color:"#60a5fa"}}>📋 Resumen completo del viaje</h2>
+                  {(!activeTrip.days||activeTrip.days.length===0)?(
+                    <div style={{textAlign:"center",padding:"40px 0",color:"#475569"}}>No hay días añadidos todavía.</div>
+                  ):(
+                    activeTrip.days.map((d,di)=>(
+                      <div key={di} style={{marginBottom:28,background:"#131d31",padding:16,borderRadius:14,border:"1px solid #1e293b"}}>
+                        <div style={{fontSize:16,fontWeight:700,color:"#f8fafc",marginBottom:12,borderBottom:"1px solid #1e293b",paddingBottom:8}}>
+                          {d.label}
+                        </div>
+                        {(!d.agenda||d.agenda.length===0)?(
+                          <div style={{fontSize:13,color:"#475569",fontStyle:"italic"}}>Sin actividades planificadas para este día.</div>
+                        ):(
+                          d.agenda.map((block,bi)=>(
+                            <div key={bi} style={{marginBottom:14}}>
+                              <div style={{fontSize:12,color:"#60a5fa",fontWeight:700,marginBottom:6,textTransform:"uppercase",letterSpacing:1}}>
+                                {block.time}
+                              </div>
+                              {block.items?.map((item,ii)=>(
+                                <div key={ii} style={{display:"flex",gap:8,padding:"6px 10px",background:"#1e293b",borderRadius:6,marginBottom:4,fontSize:13,color:"#e2e8f0"}}>
+                                  <span>•</span>
+                                  <span>{item}</span>
+                                </div>
+                              ))}
+                            </div>
+                          ))
+                        )}
+                      </div>
+                    ))
+                  )}
+                </div>
+              ):!day?(
                 <div style={{textAlign:"center",padding:"50px 0",color:"#475569"}}><div style={{fontSize:36,marginBottom:10}}>📅</div><div>Añade tu primer día con "+ Día"</div></div>
               ):(
                 <div>
@@ -705,6 +763,9 @@ function App(){
                           {block.fromEvent&&<span style={{fontSize:10,background:"#1d4ed8",color:"#bfdbfe",padding:"1px 6px",borderRadius:10,fontWeight:600}}>evento</span>}
                         </div>
                         <div style={{flex:1,height:1,background:"#1e293b"}}/>
+                        <button onClick={()=>{setModal("editBlock");setForm({blockIdx:bi,time:block.time});}} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12}} title="Editar nombre de bloque">✏️</button>
+                        <button onClick={()=>moveBlock(bi,-1)} disabled={bi===0} style={{background:"none",border:"none",color:bi===0?"#334155":"#60a5fa",cursor:bi===0?"default":"pointer",fontSize:12,fontWeight:"bold"}} title="Mover arriba">↑</button>
+                        <button onClick={()=>moveBlock(bi,1)} disabled={bi===day.agenda.length-1} style={{background:"none",border:"none",color:bi===day.agenda.length-1?"#334155":"#60a5fa",cursor:bi===day.agenda.length-1?"default":"pointer",fontSize:12,fontWeight:"bold"}} title="Mover abajo">↓</button>
                         <button onClick={()=>{setModal("newItem");setForm({blockIdx:bi});}} style={{background:"none",border:"none",color:"#60a5fa",cursor:"pointer",fontSize:12,fontWeight:700}}>+ añadir</button>
                         <button onClick={()=>deleteBlock(bi)} style={{background:"none",border:"none",color:"#475569",cursor:"pointer",fontSize:12}}>✕</button>
                       </div>
@@ -732,7 +793,12 @@ function App(){
           {/* MAP */}
           {activeTab==="map"&&(
             <div>
-              {!day?<div style={{textAlign:"center",padding:"50px 0",color:"#475569"}}>Añade un día primero</div>:(
+              {activeDay===-1?(
+                <div>
+                  <h2 style={{margin:"0 0 14px",fontSize:17,fontWeight:700}}>Mapa de todo el viaje</h2>
+                  <TripMap stops={allStops}/>
+                </div>
+              ):!day?<div style={{textAlign:"center",padding:"50px 0",color:"#475569"}}>Añade un día primero</div>:(
                 <div>
                   <h2 style={{margin:"0 0 14px",fontSize:17,fontWeight:700}}>{day.label}</h2>
                   <TripMap stops={day.mapStops||[]}/>
@@ -857,6 +923,13 @@ function App(){
               </div>
             </div>
             <button onClick={handleNewBlock} disabled={!form.time?.trim()} style={{...pBtn,marginTop:16,width:"100%",opacity:!form.time?.trim()?0.5:1}}>Añadir bloque</button>
+          </Modal>
+        )}
+        {modal==="editBlock"&&(
+          <Modal title="Editar bloque horario" onClose={()=>setModal(null)}>
+            <label style={lS}>Hora o nombre del bloque *</label>
+            <input style={iS} placeholder="Ej: 09:00, Mañana..." value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})} autoFocus/>
+            <button onClick={handleEditBlock} disabled={!form.time?.trim()} style={{...pBtn,marginTop:14,width:"100%",opacity:!form.time?.trim()?0.5:1}}>Guardar cambios</button>
           </Modal>
         )}
         {modal==="newItem"&&(
