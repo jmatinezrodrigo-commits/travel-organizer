@@ -270,7 +270,7 @@ function EventFormFields({onSubmit,submitLabel,form,setForm,activeTrip}){
 function App(){
   const [trips,setTrips]=useState([]);
   const [activeTrip,setActiveTrip]=useState(null);
-  const [activeDay,setActiveDay]=useState(0);
+  const [activeDay,setActiveDay]=useState(-1);
   const [activeTab,setActiveTab]=useState("agenda");
   const [view,setView]=useState("home");
   const [initialized,setInitialized]=useState(false);
