@@ -1013,7 +1013,11 @@ function App(){
   return null;
 }
 
-ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+try {
+  ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+} catch(e) {
+  document.body.innerHTML = '<div style="color:red;padding:20px;font-family:monospace">ERROR: '+e.message+'</div>';
+}
 </script>
 </body>
 </html>
