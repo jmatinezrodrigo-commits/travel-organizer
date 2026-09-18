@@ -353,7 +353,7 @@ function App(){
   };
 
   const handleNewBlock=()=>{
-    if(!form.time?.trim())return;
+    if(!form.time?.trim() || activeDay < 0)return;
     const day=activeTrip.days[activeDay];
     const block={id:newId(),time:form.time.trim(),items:[]};
     const sorted=[...(day.agenda||[]),block].sort((a,b)=>sortBlock(a)-sortBlock(b));
@@ -362,7 +362,7 @@ function App(){
   };
 
   const handleNewItem=()=>{
-    if(!form.text?.trim())return;
+    if(!form.text?.trim() || activeDay < 0)return;
     const day=activeTrip.days[activeDay];
     const updatedAgenda=day.agenda.map((b,bi)=>bi!==form.blockIdx?b:{...b,items:[...(b.items||[]),form.text.trim()]});
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
@@ -370,7 +370,7 @@ function App(){
   };
 
   const handleEditItem=()=>{
-    if(!form.text?.trim())return;
+    if(!form.text?.trim() || activeDay < 0)return;
     const day=activeTrip.days[activeDay];
     const updatedAgenda=day.agenda.map((b,bi)=>bi!==form.blockIdx?b:{...b,items:b.items.map((it,ii)=>ii===form.itemIdx?form.text.trim():it)});
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
@@ -378,20 +378,27 @@ function App(){
   };
 
   const deleteItem=(bi,ii)=>{
+    if(activeDay < 0) return;
     const day=activeTrip.days[activeDay];
     const updatedAgenda=day.agenda.map((b,bii)=>bii!==bi?b:{...b,items:b.items.filter((_,i)=>i!==ii)});
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
   };
+
   const deleteBlock=(bi)=>{
+    if(activeDay < 0) return;
     const day=activeTrip.days[activeDay];
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:day.agenda.filter((_,bii)=>bii!==bi)}:d)});
   };
+
   const editBlockName=(bi,newTime)=>{
+    if(activeDay < 0) return;
     const day=activeTrip.days[activeDay];
     const updatedAgenda=day.agenda.map((b,bii)=>bii===bi?{...b,time:newTime}:b);
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
   };
+
   const moveBlock=(bi,dir)=>{
+    if(activeDay < 0) return;
     const day=activeTrip.days[activeDay];
     const agenda=[...day.agenda];
     const target=bi+dir;
@@ -399,19 +406,7 @@ function App(){
     [agenda[bi],agenda[target]]=[agenda[target],agenda[bi]];
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda}:d)});
   };
-  const editBlockName=(bi,newTime)=>{
-    const day=activeTrip.days[activeDay];
-    const updatedAgenda=day.agenda.map((b,bii)=>bii===bi?{...b,time:newTime}:b);
-    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda:updatedAgenda}:d)});
-  };
-  const moveBlock=(bi,dir)=>{
-    const day=activeTrip.days[activeDay];
-    const agenda=[...day.agenda];
-    const target=bi+dir;
-    if(target<0||target>=agenda.length)return;
-    [agenda[bi],agenda[target]]=[agenda[target],agenda[bi]];
-    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,agenda}:d)});
-  };
+
   const deleteDay=(di)=>{
     const updatedDays=activeTrip.days.filter((_,i)=>i!==di).map((d,i)=>({...d,day:i+1}));
     setActiveDay(Math.max(0,Math.min(activeDay,updatedDays.length-1)));
@@ -463,12 +458,15 @@ function App(){
 
   const deleteEvent=(i)=>updateActiveTrip({...activeTrip,fixedEvents:activeTrip.fixedEvents.filter((_,ii)=>ii!==i)});
   const handleNewStop=()=>{
-    if(!form.name?.trim())return;
+    if(!form.name?.trim() || activeDay < 0)return;
     const stop={id:newId(),name:form.name.trim(),note:form.note?.trim()||"",lat:form.lat?parseFloat(form.lat):null,lng:form.lng?parseFloat(form.lng):null};
     updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,mapStops:[...(d.mapStops||[]),stop]}:d)});
     setModal(null);setForm({});
   };
-  const deleteStop=(i)=>updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,di)=>di===activeDay?{...d,mapStops:d.mapStops.filter((_,ii)=>ii!==i)}:d)});
+  const deleteStop=(i)=>{
+    if(activeDay < 0) return;
+    updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,di)=>di===activeDay?{...d,mapStops:d.mapStops.filter((_,ii)=>ii!==i)}:d)});
+  };
 
   const handleImportLandmarks=()=>{
     setJsonError("");
@@ -523,8 +521,6 @@ function App(){
     </div>
   );
 
-  // EventFormFields moved outside App component
-
   // ══════════════════════════════════════════════════════════════════════════
   // HOME
   // ══════════════════════════════════════════════════════════════════════════
@@ -559,7 +555,7 @@ function App(){
         ):(
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(230px,1fr))",gap:12}}>
             {trips.map(t=>(
-              <div key={t.id} onClick={()=>{setActiveTrip(t);setActiveDay(0);setActiveTab("agenda");setView("trip");}}
+              <div key={t.id} onClick={()=>{setActiveTrip(t);setActiveDay(-1);setActiveTab("agenda");setView("trip");}}
                 style={{background:"#1e293b",borderRadius:14,padding:16,cursor:"pointer",border:"1px solid #334155"}}>
                 <div style={{display:"flex",justifyContent:"space-between"}}>
                   <span style={{fontSize:26}}>{DEST_EMOJI(t.destination)}</span>
@@ -660,7 +656,7 @@ function App(){
               trip.id=trip.id||newId();trip.createdAt=trip.createdAt||new Date().toISOString();
               const exists=trips.findIndex(t=>t.id===trip.id);
               const updated=exists>=0?trips.map(t=>t.id===trip.id?trip:t):[...trips,trip];
-              persist(updated);setActiveTrip(trip);setActiveDay(0);setActiveTab("agenda");setView("trip");setModal(null);setJsonInput("");
+              persist(updated);setActiveTrip(trip);setActiveDay(-1);setActiveTab("agenda");setView("trip");setModal(null);setJsonInput("");
             }catch{setJsonError("JSON inválido.");}
           }} disabled={!jsonInput.trim()} style={{...pBtn,marginTop:12,width:"100%",opacity:!jsonInput.trim()?0.5:1}}>✅ Importar viaje</button>
         </Modal>
@@ -876,7 +872,7 @@ function App(){
           <Modal title="Editar día" onClose={()=>setModal(null)}>
             <label style={lS}>Nombre</label>
             <input style={iS} value={form.label||""} onChange={e=>setForm({...form,label:e.target.value})} autoFocus/>
-            <button onClick={()=>{if(!form.label?.trim())return;updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,label:form.label.trim()}:d)});setModal(null);setForm({});}} style={{...pBtn,marginTop:14,width:"100%"}}>Guardar</button>
+            <button onClick={()=>{if(!form.label?.trim()||activeDay<0)return;updateActiveTrip({...activeTrip,days:activeTrip.days.map((d,i)=>i===activeDay?{...d,label:form.label.trim()}:d)});setModal(null);setForm({});}} style={{...pBtn,marginTop:14,width:"100%"}}>Guardar</button>
           </Modal>
         )}
         {modal==="confirmDeleteDay"&&(
@@ -907,7 +903,7 @@ function App(){
         )}
         {modal==="editBlock"&&(
           <Modal title="Editar bloque horario" onClose={()=>setModal(null)}>
-            <label style={lS}>Nombre o hora</label>
+            <label style={lS}>Hora o nombre del bloque</label>
             <input style={iS} value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})} autoFocus/>
             <div style={{marginTop:10}}>
               <div style={{fontSize:11,color:"#64748b",marginBottom:8,textTransform:"uppercase",letterSpacing:1}}>Opciones rápidas</div>
@@ -926,20 +922,6 @@ function App(){
             }} disabled={!form.time?.trim()} style={{...pBtn,marginTop:14,width:"100%",opacity:!form.time?.trim()?0.5:1}}>Guardar</button>
           </Modal>
         )}
-
-        {modal==="editBlock"&&(
-          <Modal title="Renombrar bloque" onClose={()=>setModal(null)}>
-            <label style={lS}>Hora o nombre del bloque</label>
-            <input style={iS} value={form.time||""} onChange={e=>setForm({...form,time:e.target.value})} autoFocus/>
-            <div style={{marginTop:10,display:"flex",flexWrap:"wrap",gap:6}}>
-              {["Mañana","Tarde","Noche","08:00","09:00","10:00","11:00","12:00","13:00","14:00","15:00","16:00","17:00","18:00","19:00","20:00","21:00","22:00"].map(q=>(
-                <button key={q} onClick={()=>setForm({...form,time:q})} style={{padding:"5px 10px",borderRadius:20,border:"1px solid",borderColor:form.time===q?"#60a5fa":"#334155",background:form.time===q?"#1d4ed8":"#0f172a",color:form.time===q?"white":"#94a3b8",cursor:"pointer",fontSize:12}}>{q}</button>
-              ))}
-            </div>
-            <button onClick={()=>{if(!form.time?.trim())return;editBlockName(form.blockIdx,form.time.trim());setModal(null);setForm({});}} style={{...pBtn,marginTop:14,width:"100%"}}>Guardar</button>
-          </Modal>
-        )}
-
         {modal==="newBlock"&&(
           <Modal title="Nuevo bloque horario" onClose={()=>setModal(null)}>
             <label style={lS}>Hora o nombre *</label>
