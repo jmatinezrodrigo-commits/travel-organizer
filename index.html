@@ -28,10 +28,19 @@
 <script type="text/babel">
 const { useState, useEffect, useRef } = React;
 
-// ─── GITHUB GIST STORAGE ───────────────────────────────────────────────────
-const GITHUB_TOKEN = "REEMPLAZA_CON_TU_TOKEN";
+// ─── GITHUB GIST STORAGE (TOKEN DESDE LOCALSTORAGE) ───────────────────────
 let currentUser = null;
 let gistId = null;
+
+function getStoredToken() {
+  try { return localStorage.getItem("travel_app_gh_token") || ""; } catch { return ""; }
+}
+function setStoredToken(token) {
+  try {
+    if(token) localStorage.setItem("travel_app_gh_token", token.trim());
+    else localStorage.removeItem("travel_app_gh_token");
+  } catch {}
+}
 
 function getFilename(user) { return `travel-organizer-${user.toLowerCase().replace(/[^a-z0-9]/g,"-")}.json`; }
 function getLocalKey(user) { return `travel_organizer_${user.toLowerCase()}`; }
@@ -46,9 +55,11 @@ function localLoad() {
   return null;
 }
 async function gistLoad(user) {
+  const token = getStoredToken();
+  if(!token) return null; // Si no hay token, opera solo en local
   const filename = getFilename(user);
   const res = await fetch("https://api.github.com/gists", {
-    headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
+    headers: { "Authorization": `token ${token}`, "Accept": "application/vnd.github.v3+json" }
   });
   if(!res.ok) throw new Error(`GitHub ${res.status}`);
   const gists = await res.json();
@@ -56,29 +67,24 @@ async function gistLoad(user) {
   if(!found) { gistId = null; return null; }
   gistId = found.id;
   const res2 = await fetch(`https://api.github.com/gists/${gistId}`, {
-    headers: { "Authorization": `token ${GITHUB_TOKEN}`, "Accept": "application/vnd.github.v3+json" }
+    headers: { "Authorization": `token ${token}`, "Accept": "application/vnd.github.v3+json" }
   });
   const data = await res2.json();
   const raw = data.files[filename]?.content;
   return raw ? JSON.parse(raw) : null;
 }
 async function gistSave(trips, user) {
+  const token = getStoredToken();
+  if(!token) return; // Si no hay token, no intenta guardar en Gist
   const filename = getFilename(user || currentUser);
   const content = JSON.stringify(trips, null, 2);
-  const headers = { "Authorization": `token ${GITHUB_TOKEN}`, "Content-Type": "application/json", "Accept": "application/vnd.github.v3+json" };
+  const headers = { "Authorization": `token ${token}`, "Content-Type": "application/json", "Accept": "application/vnd.github.v3+json" };
   if(gistId) {
     await fetch(`https://api.github.com/gists/${gistId}`, { method:"PATCH", headers, body: JSON.stringify({ files:{ [filename]:{ content } } }) });
   } else {
     const res = await fetch("https://api.github.com/gists", { method:"POST", headers, body: JSON.stringify({ description:`Travel Organizer - ${user||currentUser}`, public:false, files:{ [filename]:{ content } } }) });
     const d = await res.json(); gistId = d.id;
   }
-}
-function saveTrips(trips) {
-  if(!currentUser) return;
-  localSave(trips);
-  gistSave(trips, currentUser)
-    .then(()=>{ document.title = "☁️ Guardado"; setTimeout(()=>document.title="Travel Organizer",2000); })
-    .catch(e=>{ console.error("Gist error:", e.message); document.title = "❌ Error al guardar"; });
 }
 
 // ─── HELPERS ───────────────────────────────────────────────────────────────
@@ -283,6 +289,7 @@ function App(){
   const [username,setUsername]=useState("");
   const [usernameInput,setUsernameInput]=useState("");
   const [loginError,setLoginError]=useState("");
+  const [ghToken,setGhToken]=useState(getStoredToken());
 
   // ── Load ──────────────────────────────────────────────────────────────────
   const loadUserData = (user) => {
@@ -290,16 +297,21 @@ function App(){
     gistId = null;
     const local = localLoad() || [];
     if(local.length){ setTrips(local); setInitialized(true); }
-    setSyncing(true);
-    gistLoad(user).then(cloud=>{
-      if(cloud && cloud.length > 0){
-        if(cloud.length >= local.length){ setTrips(cloud); localSave(cloud); }
-        else gistSave(local, user).catch(()=>{});
-      } else if(local.length > 0){
-        gistSave(local, user).catch(()=>{});
-      }
-    }).catch(e=>{ console.error("Load error:", e.message); })
-    .finally(()=>{ setSyncing(false); setInitialized(true); });
+    
+    if(getStoredToken()) {
+      setSyncing(true);
+      gistLoad(user).then(cloud=>{
+        if(cloud && cloud.length > 0){
+          if(cloud.length >= local.length){ setTrips(cloud); localSave(cloud); }
+          else gistSave(local, user).catch(()=>{});
+        } else if(local.length > 0){
+          gistSave(local, user).catch(()=>{});
+        }
+      }).catch(e=>{ console.error("Load error:", e.message); })
+      .finally(()=>{ setSyncing(false); setInitialized(true); });
+    } else {
+      setInitialized(true);
+    }
   };
 
   useEffect(()=>{
@@ -312,13 +324,19 @@ function App(){
   const persist=(updated)=>{
     setTrips(updated);
     localSave(updated);
-    gistSave(updated, currentUser).then(()=>{setSyncing(false);setStatus("☁️ Guardado ✓");setTimeout(()=>setStatus(""),2500);}).catch(e=>{setSyncing(false);setStatus("❌ "+e.message);console.error("Gist:",e.message);});
+    if(getStoredToken()){
+      gistSave(updated, currentUser).then(()=>{setSyncing(false);setStatus("☁️ Guardado ✓");setTimeout(()=>setStatus(""),2500);}).catch(e=>{setSyncing(false);setStatus("❌ "+e.message);console.error("Gist:",e.message);});
+    } else {
+      setStatus("💾 Guardado local");
+      setTimeout(()=>setStatus(""), 2000);
+    }
     if(activeTrip){const r=updated.find(t=>t.id===activeTrip.id);if(r)setActiveTrip(r);}
   };
+
   const updateActiveTrip=(trip)=>{
     setActiveTrip(trip);
     const updated=trips.map(t=>t.id===trip.id?trip:t);
-    setTrips(updated); localSave(updated); gistSave(updated, currentUser).then(()=>{setSyncing(false);setStatus("☁️ Guardado ✓");setTimeout(()=>setStatus(""),2500);}).catch(e=>{setSyncing(false);setStatus("❌ "+e.message);console.error("Gist:",e.message);});
+    persist(updated);
   };
 
   // ── Trip handlers ─────────────────────────────────────────────────────────
@@ -509,7 +527,7 @@ function App(){
         }} style={{...pBtn,width:"100%",padding:"14px",fontSize:15,borderRadius:12}}>
           Entrar →
         </button>
-        <p style={{color:"#334155",fontSize:12,marginTop:20}}>Cada usuario tiene sus propios viajes guardados en la nube.</p>
+        <p style={{color:"#334155",fontSize:12,marginTop:20}}>Los datos se guardan en tu navegador localmente o en la nube si añades tu token.</p>
       </div>
     </div>
   );
@@ -532,11 +550,18 @@ function App(){
             <div style={{fontSize:11,letterSpacing:3,color:"#475569",textTransform:"uppercase",marginBottom:5}}>Tu cuaderno de</div>
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <h1 style={{margin:0,fontSize:34,fontWeight:800,background:"linear-gradient(135deg,#60a5fa,#a78bfa)",WebkitBackgroundClip:"text",WebkitTextFillColor:"transparent"}}>Viajes</h1>
-              <span style={{fontSize:12,color:syncing?"#64748b":"#22c55e",marginTop:4}}>{syncing?"☁️ sync...":"☁️ guardado"}</span>
+              <span style={{fontSize:12,color:syncing?"#64748b":ghToken?"#22c55e":"#94a3b8",marginTop:4}}>
+                {syncing?"☁️ sync...":ghToken?"☁️ guardado nube":"💾 guardado local"}
+              </span>
             </div>
-            <div style={{fontSize:12,color:"#64748b",marginTop:4}}>👤 {username} · <span style={{color:"#2563eb",cursor:"pointer"}} onClick={()=>{ try{localStorage.removeItem("last_user");}catch{} setUsername(""); setUsernameInput(""); setTrips([]); setInitialized(false); currentUser=null; gistId=null; }}>Cambiar</span></div>
+            <div style={{fontSize:12,color:"#64748b",marginTop:4}}>
+              👤 {username} · <span style={{color:"#2563eb",cursor:"pointer"}} onClick={()=>{ try{localStorage.removeItem("last_user");}catch{} setUsername(""); setUsernameInput(""); setTrips([]); setInitialized(false); currentUser=null; gistId=null; }}>Cambiar</span>
+            </div>
           </div>
           <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <button onClick={()=>{ setModal("configToken"); setForm({token: ghToken}); }} style={sBtn}>
+              {ghToken ? "🔑 Token ✓" : "🔑 Añadir Token"}
+            </button>
             <button onClick={()=>setModal("backup")} style={sBtn}>⬇ Backup</button>
             <button onClick={()=>{setModal("importJSON");setJsonInput("");setJsonError("");}} style={sBtn}>⬆ Importar</button>
             <button onClick={()=>{setModal("newTrip");setForm({});}} style={pBtn}>+ Nuevo viaje</button>
@@ -574,6 +599,36 @@ function App(){
           </div>
         )}
       </div>
+
+      {modal==="configToken"&&(
+        <Modal title="Configurar Token de GitHub" onClose={()=>setModal(null)}>
+          <div style={{fontSize:13,color:"#94a3b8",marginBottom:12,lineHeight:1.5}}>
+            Pega tu <b>Personal Access Token (classic)</b> con el permiso <code>gist</code> habilitado para sincronizar datos en la nube. Si lo dejas en blanco, la app funcionará solo con almacenamiento local.
+          </div>
+          <input style={iS} placeholder="ghp_xxxxxxxxxxxxxxxxxxxx" value={form.token||""} onChange={e=>setForm({...form,token:e.target.value})}/>
+          <div style={{display:"flex",gap:10,marginTop:16}}>
+            {ghToken && (
+              <button onClick={()=>{ setStoredToken(""); setGhToken(""); setModal(null); setStatus("Token eliminado. Guardando localmente"); }} style={{...sBtn,color:"#ef4444",borderColor:"#ef4444"}}>
+                Quitar Token
+              </button>
+            )}
+            <button onClick={()=>{
+              const val = form.token?.trim() || "";
+              setStoredToken(val);
+              setGhToken(val);
+              setModal(null);
+              if(val) {
+                setStatus("🔑 Token guardado");
+                loadUserData(currentUser);
+              } else {
+                setStatus("Guardando localmente");
+              }
+            }} style={{...pBtn,flex:1}}>
+              Guardar
+            </button>
+          </div>
+        </Modal>
+      )}
 
       {modal==="backup"&&(
         <Modal title="Backup de viajes" onClose={()=>setModal(null)}>
@@ -678,7 +733,9 @@ function App(){
             <div style={{fontWeight:700,fontSize:15,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{activeTrip.title}</div>
             {activeTrip.dates&&<div style={{fontSize:11,color:"#64748b"}}>{activeTrip.dates}</div>}
           </div>
-          <span style={{fontSize:11,color:syncing?"#64748b":"#22c55e",flexShrink:0}}>{syncing?"☁️":"☁️✓"}</span>
+          <span style={{fontSize:11,color:syncing?"#64748b":ghToken?"#22c55e":"#94a3b8",flexShrink:0}}>
+            {syncing?"☁️":ghToken?"☁️✓":"💾"}
+          </span>
         </div>
 
         {/* Tabs */}
